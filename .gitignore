@@ -45,10 +45,6 @@ Desktop.ini
 tmp/
 temp/
 
-# Local uploads and generated storage
-uploads/
-storage/
-
 # Certificates and private keys
 *.pem
 *.key
