@@ -1,6 +1,37 @@
+
+const nodemailer = require("nodemailer");
 const { Resend } = require("resend");
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+const mailConfig = (process.env.MAIL_CONFIG || "smtp")
+  .trim()
+  .toLowerCase();
+
+const resend =
+  mailConfig === "resend"
+    ? new Resend(process.env.RESEND_API_KEY)
+    : null;
+
+const transporter =
+  mailConfig !== "resend"
+    ? nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT || 587),
+        secure: Number(process.env.SMTP_PORT || 587) === 465,
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASSWORD,
+        },
+      })
+    : null;
+
+const escapeHtml = (value) =>
+  String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[char]);
 
 const sendOtpEmail = async ({ email, otp, purpose, userName }) => {
   let title;
@@ -31,16 +62,6 @@ const sendOtpEmail = async ({ email, otp, purpose, userName }) => {
   }
 
   const expiryMinutes = Number(process.env.OTP_EXPIRY_MINUTES) || 10;
-
-  // Escape user-provided text before inserting it into HTML.
-  const escapeHtml = (value) =>
-    String(value ?? "").replace(/[&<>"']/g, (char) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;",
-    })[char]);
 
   const safeName = escapeHtml(userName || "there");
   const safeOtp = escapeHtml(otp);
@@ -98,26 +119,39 @@ const sendOtpEmail = async ({ email, otp, purpose, userName }) => {
 </html>
 `;
 
-  const { data, error } = await resend.emails.send({
+  if (mailConfig === "resend") {
+    if (!process.env.RESEND_API_KEY) {
+      throw new Error("RESEND_API_KEY is required when MAIL_CONFIG=resend.");
+    }
+
+    const { data, error } = await resend.emails.send({
+      from: process.env.EMAIL_FROM,
+      to: [email],
+      subject: title,
+      html,
+    });
+
+    if (error) {
+      const err = new Error(`Resend email failed: ${error.message}`);
+      err.code = "EMAIL_SEND_FAILED";
+      throw err;
+    }
+
+    if (!data?.id) {
+      const err = new Error("Resend did not return an email ID.");
+      err.code = "EMAIL_SEND_FAILED";
+      throw err;
+    }
+
+    return data;
+  }
+
+  return transporter.sendMail({
     from: process.env.EMAIL_FROM,
-    to: [email],
+    to: email,
     subject: title,
     html,
   });
-
-  if (error) {
-    const err = new Error(`OTP email delivery request failed: ${error.message}`);
-    err.code = "EMAIL_SEND_FAILED";
-    throw err;
-  }
-
-  if (!data?.id) {
-    const err = new Error("Email provider did not return an email ID.");
-    err.code = "EMAIL_SEND_FAILED";
-    throw err;
-  }
-
-  return data;
 };
 
 module.exports = { sendOtpEmail };
