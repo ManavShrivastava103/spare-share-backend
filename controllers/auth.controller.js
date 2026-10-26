@@ -6,8 +6,10 @@ const mongoose = require("mongoose");
 const User = require("../models/user.model");
 const OTP = require("../models/otp.model");
 const UserSession = require("../models/userSession.model");
+const Device = require("../models/device.model");
 
 const { sendOtpEmail } = require("../services/email.service");
+const { generateDeviceName } = require("./installation.controller");
 
 const OTP_EXPIRY_MINUTES = Number(process.env.OTP_EXPIRY_MINUTES) || 10;
 const OTP_MAX_ATTEMPTS = Number(process.env.OTP_MAX_ATTEMPTS) || 5;
@@ -260,7 +262,7 @@ const completeRegistration = async (req, res, next) => {
 const loginWithPassword = async (req, res, next) => {
   const session = await mongoose.startSession();
   try {
-    const { email, password, clientDeviceId } = req.body;
+    const { email, password, clientDeviceId, deviceId } = req.body;
     const normalizedEmail = normalizeEmail(email);
     // Validate required fields
     if (!normalizedEmail || !password) {
@@ -304,6 +306,14 @@ const loginWithPassword = async (req, res, next) => {
       sessionData = await createUserSession({ user, req, clientDeviceId, session });
       await User.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } }, { session });
     });
+    // Update the Device record to associate it with the logged-in user if a deviceId is provided
+    if(deviceId){
+      const device = await Device.findOne({ deviceId }).session(session);
+      const { manufacturer, model } = device;
+      const deviceName = await generateDeviceName({userId,manufacturer,model,session});
+      await Device.findOneAndUpdate({deviceId},{ $set:{userId: user._id, name: deviceName } },{session});
+    }
+
     return res.status(200).json({
       success: true,
       message: "Login successful.",
@@ -388,7 +398,7 @@ const loginWithOtp = async (req, res, next) => {
     console.log("Login with OTP Body : ", req.body);
   const session = await mongoose.startSession();
   try {
-    const { email, otp, clientDeviceId } = req.body;
+    const { email, otp, clientDeviceId, deviceId } = req.body;
     const normalizedEmail = normalizeEmail(email);
     // Validate required fields
     if (!normalizedEmail || !otp) {
@@ -446,6 +456,14 @@ const loginWithOtp = async (req, res, next) => {
       sessionData = await createUserSession({ user, req, clientDeviceId, session });
       await User.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } }, { session });
     });
+
+    // Update the Device record to associate it with the logged-in user if a deviceId is provided
+    if(deviceId){
+      const device = await Device.findOne({ deviceId }).session(session);
+      const { manufacturer, model } = device;
+      const deviceName = await generateDeviceName({userId,manufacturer,model,session});
+      await Device.findOneAndUpdate({deviceId},{ $set:{userId: user._id, name: deviceName } },{session});
+    }
 
     return res.status(200).json({
       success: true,
