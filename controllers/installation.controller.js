@@ -1,6 +1,8 @@
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+const mongoose = require("mongoose");
+
 const Device = require("../models/device.model");
 const Counter = require("../models/counter.model");
 const UserSession = require("../models/userSession.model");
@@ -15,7 +17,7 @@ const downloadRootfs = async (req, res, next) => {
       "..",
       "storage",
       //"debian-arm64-rootfs-android.tar.gz"
-      "debian-arm64-rootfs-android-backup.tar"
+      "debian-arm64-rootfs-android-backup.tar.gz"
     );
     console.log("[ROOTFS] Archive path:", rootfsPath);
 
