@@ -14,7 +14,8 @@ const downloadRootfs = async (req, res, next) => {
       __dirname,
       "..",
       "storage",
-      "debian-arm64-rootfs-android.tar.gz"
+      //"debian-arm64-rootfs-android.tar.gz"
+      "debian-arm64-rootfs-android-backup.tar"
     );
     console.log("[ROOTFS] Archive path:", rootfsPath);
 
@@ -36,7 +37,7 @@ const downloadRootfs = async (req, res, next) => {
     res.setHeader("Content-Length", stat.size);
     res.setHeader(
       "Content-Disposition",
-      'attachment; filename="debian-arm64-rootfs-android.tar.gz"'
+      'attachment; filename="debian-arm64-rootfs-android-backup.tar"'
     );
     console.log("[ROOTFS] Starting archive stream...");
     // Stream the archive instead of loading the entire 71 MB file into memory.
