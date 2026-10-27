@@ -34,7 +34,7 @@ const createSlug = (value) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, 
 // Fields clients are allowed to modify
 const allowedUpdateFields = [
   "name", "slug", "description", "visibility", "port",
-  "environmentVersionId", "resources", "collaborators",
+  "environmentVersionId", "resources", "collaborators", "repository"
 ];
 
 // CREATE SERVER --> SAVE THE INFO TO THE CLOUD
