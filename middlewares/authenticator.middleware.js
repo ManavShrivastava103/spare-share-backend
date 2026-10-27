@@ -68,7 +68,7 @@ return async (req, res, next) => {
     }
 
     // Attach authenticated information
-    req.user = {id: userId, email, isPremium};
+    req.user = {userId, email, isPremium};
     req.session = {
       id: session.sessionId,
       dbId: session._id,

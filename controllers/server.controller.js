@@ -34,8 +34,7 @@ const createSlug = (value) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, 
 // Fields clients are allowed to modify
 const allowedUpdateFields = [
   "name", "slug", "description", "visibility", "port",
-  "environmentVersionId", "uploadType", "repository",
-  "resources", "collaborators",
+  "environmentVersionId", "resources", "collaborators",
 ];
 
 // CREATE SERVER --> SAVE THE INFO TO THE CLOUD
@@ -85,36 +84,21 @@ const createServer = async (req, res, next) => {
 };
 
 
-// GET ALL SERVERS OWNED BY THE LOGGED-IN USER
+// GET ALL SERVERS OWNED BY OR SHARED WITH THE LOGGED-IN USER
 const getServers = async (req, res, next) => {
   try {
     const userId = getUserId(req);
-    const page = Number(req.query.page ?? 1);
-    const limit = Number(req.query.limit ?? 10);
 
-    if (!Number.isInteger(page) || !Number.isInteger(limit) || page < 1 || limit < 1 || limit > 100) {
-      throw createError("Page must be positive and limit must be between 1 and 100.", 400, "INVALID_PAGINATION");
-    }
-
-    const filter = { owner: userId, isActive: true, status: { $ne: "deleted" } };
-
-    const [servers, total] = await Promise.all([
-      Server.find(filter)
-        .sort({ createdAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .populate("environmentVersionId", "name version language")
-        .lean(),
-      Server.countDocuments(filter),
-    ]);
+    const servers = await Server.find({
+      $or: [{owner: userId}, {collaborators: userId},],
+      isActive: true,
+      status: { $ne: "deleted" },
+    }).sort({ createdAt: -1 }).populate("environmentVersionId", "name version type").lean();
 
     return res.status(200).json({
       success: true,
       message: "Servers fetched successfully.",
-      data: {
-        servers,
-        pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
-      },
+      data: { servers },
     });
   } catch (error) {
     return next(error);
@@ -159,11 +143,9 @@ const updateServer = async (req, res, next) => {
     if (!isValidObjectId(serverId)) throw createError("Invalid server ID.", 400, "INVALID_SERVER_ID");
 
     const updates = {};
-
     for (const field of allowedUpdateFields) {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     }
-
     if (Object.keys(updates).length === 0) {
       throw createError("No valid fields provided for update.", 400, "NO_VALID_UPDATE_FIELDS");
     }
@@ -171,31 +153,24 @@ const updateServer = async (req, res, next) => {
     if (updates.name !== undefined && (typeof updates.name !== "string" || !updates.name.trim())) {
       throw createError("Server name cannot be empty.", 400, "INVALID_SERVER_NAME");
     }
-
     if (updates.name !== undefined) updates.name = updates.name.trim();
-
     if (updates.slug !== undefined) {
       if (typeof updates.slug !== "string" || !updates.slug.trim()) {
         throw createError("Server slug cannot be empty.", 400, "INVALID_SERVER_SLUG");
       }
-
       updates.slug = createSlug(updates.slug);
       if (!updates.slug) throw createError("Invalid server slug.", 400, "INVALID_SERVER_SLUG");
     }
-
     if (updates.environmentVersionId !== undefined && !isValidObjectId(updates.environmentVersionId)) {
       throw createError("Invalid environment version ID.", 400, "INVALID_ENVIRONMENT_VERSION_ID");
     }
-
     if (updates.collaborators !== undefined) {
       if (!Array.isArray(updates.collaborators)) {
         throw createError("Collaborators must be an array of user IDs.", 400, "INVALID_COLLABORATORS");
       }
-
       for (const id of updates.collaborators) {
         if (!isValidObjectId(id)) throw createError("One or more collaborator IDs are invalid.", 400, "INVALID_COLLABORATOR_ID");
       }
-
       updates.collaborators = [...new Set([userId.toString(), ...updates.collaborators.map(String)])];
     }
 
@@ -204,11 +179,9 @@ const updateServer = async (req, res, next) => {
       { $set: updates },
       { new: true, runValidators: true, context: "query" }
     );
-
     if (!server) {
       throw createError("Server not found or you do not have permission to update it.", 404, "SERVER_NOT_FOUND");
     }
-
     return res.status(200).json({
       success: true,
       message: "Server updated successfully.",
