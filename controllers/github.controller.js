@@ -570,7 +570,7 @@ const disconnectGitHub = async (req, res, next) => {
     }
 
     const installation = await GitHubInstallation.findOne({userId, status: "active"});
-    const installationId = installationRecord?.installationId?.toString();
+    const installationId = installation?.installationId?.toString();
 
     if (
       typeof installationId !== "string" ||
