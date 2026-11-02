@@ -1,6 +1,9 @@
+
 const crypto = require("crypto");
+
 const GitHubOAuthState = require("../models/githubOAuthState.model");
 const GitHubInstallation = require("../models/githubInstallation.model");
+
 const {
   getInstallationDetails,
 } = require("../services/github.service");
@@ -37,12 +40,13 @@ const startGitHubInstallation = async (req, res, next) => {
 
     // Generate a cryptographically secure, one-time state.
     const state = GitHubOAuthState.generateState();
+
     const stateHash = crypto
       .createHash("sha256")
       .update(state)
       .digest("hex");
 
-    // Expire the state after 10 minutes.
+    // Expire state after 10 minutes.
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
     await GitHubOAuthState.create({
@@ -69,10 +73,14 @@ const startGitHubInstallation = async (req, res, next) => {
 };
 
 
-
+// Complete GitHub installation and return the user to SpareShare.
 const completeGitHubInstallation = async (req, res, next) => {
   try {
-    const { installation_id, setup_action, state } = req.query;
+    const {
+      installation_id,
+      setup_action,
+      state,
+    } = req.query;
 
     if (
       typeof installation_id !== "string" ||
@@ -88,12 +96,25 @@ const completeGitHubInstallation = async (req, res, next) => {
       );
     }
 
+    const deepLink =
+      process.env.GITHUB_MOBILE_DEEP_LINK ||
+      "spareshare://github/connected";
+
+    // Only permit the registered SpareShare deep link.
+    if (deepLink !== "spareshare://github/connected") {
+      throw createError(
+        "Invalid mobile application redirect configuration.",
+        500,
+        "INVALID_MOBILE_REDIRECT_CONFIG"
+      );
+    }
+
     const stateHash = crypto
       .createHash("sha256")
       .update(state)
       .digest("hex");
 
-    // Atomically consume the state once, only if it has not expired.
+    // Atomically consume the state once, if it has not expired.
     const savedState = await GitHubOAuthState.findOneAndDelete({
       stateHash,
       expiresAt: { $gt: new Date() },
@@ -109,7 +130,7 @@ const completeGitHubInstallation = async (req, res, next) => {
 
     const installationId = Number(installation_id);
 
-    // Verify this installation belongs to our configured GitHub App.
+    // Verify the installation using GitHub App credentials.
     const details = await getInstallationDetails(installationId);
 
     if (
@@ -125,13 +146,15 @@ const completeGitHubInstallation = async (req, res, next) => {
       );
     }
 
+    // Check whether this installation is already linked.
     const existingInstallation =
       await GitHubInstallation.findOne({ installationId });
 
-    // Never let a callback reassign another user's installation.
+    // Never allow an installation to be reassigned.
     if (
       existingInstallation &&
-      String(existingInstallation.userId) !== String(savedState.userId)
+      String(existingInstallation.userId) !==
+        String(savedState.userId)
     ) {
       throw createError(
         "This GitHub installation is already connected to another SpareShare account.",
@@ -167,62 +190,200 @@ const completeGitHubInstallation = async (req, res, next) => {
       }
     );
 
-    return res.status(200).json({
-      success: true,
-      message: "GitHub App installation connected successfully.",
-      installation: {
-        installationId,
-        accountLogin: details.accountLogin,
-        accountType: details.accountType,
-        status: details.suspendedAt ? "suspended" : "active",
-      },
+    // Prevent caching of the callback response.
+    res.set({
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+      "Pragma": "no-cache",
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
     });
+
+    // HTML success page with a manual fallback button.
+    return res.status(200).type("html").send(`
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+
+          <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0"
+          />
+
+          <meta
+            name="robots"
+            content="noindex, nofollow"
+          />
+
+          <title>GitHub Connected | SpareShare</title>
+
+          <style>
+            * {
+              box-sizing: border-box;
+            }
+
+            body {
+              margin: 0;
+              min-height: 100vh;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              padding: 24px;
+              background: #f5f7fb;
+              font-family: Arial, sans-serif;
+              color: #172033;
+            }
+
+            .container {
+              width: 100%;
+              max-width: 420px;
+              padding: 36px 26px;
+              background: white;
+              border-radius: 18px;
+              text-align: center;
+              box-shadow: 0 8px 30px rgba(0, 0, 0, 0.06);
+            }
+
+            .success {
+              width: 64px;
+              height: 64px;
+              margin: 0 auto 20px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              border-radius: 50%;
+              background: #dcfce7;
+              color: #15803d;
+              font-size: 34px;
+            }
+
+            h1 {
+              font-size: 25px;
+              margin-bottom: 12px;
+            }
+
+            p {
+              color: #64748b;
+              line-height: 1.6;
+              font-size: 15px;
+            }
+
+            .button {
+              display: block;
+              margin-top: 25px;
+              padding: 15px;
+              border-radius: 10px;
+              background: #172554;
+              color: white;
+              text-decoration: none;
+              font-weight: bold;
+            }
+
+            .note {
+              font-size: 12px;
+              margin-top: 18px;
+            }
+          </style>
+        </head>
+
+        <body>
+          <div class="container">
+
+            <div class="success">&#10003;</div>
+
+            <h1>GitHub Connected!</h1>
+
+            <p>
+              Your GitHub account has been successfully
+              connected to SpareShare.
+            </p>
+
+            <p>
+              Return to SpareShare to continue selecting
+              your repository and deploying your project.
+            </p>
+
+            <a
+              class="button"
+              href="spareshare://github/connected"
+            >
+              Open SpareShare
+            </a>
+
+            <p class="note">
+              If the app does not open automatically,
+              tap the button above.
+            </p>
+
+          </div>
+
+          <script>
+            window.addEventListener("load", function () {
+              setTimeout(function () {
+                window.location.href =
+                  "spareshare://github/connected";
+              }, 500);
+            });
+          </script>
+        </body>
+      </html>
+    `);
   } catch (error) {
     next(error);
   }
 };
 
 
+// Handle GitHub App lifecycle webhooks.
 const handleGitHubWebhook = async (req, res, next) => {
   try {
     const secret = process.env.GITHUB_WEBHOOK_SECRET;
     const signature = req.get("x-hub-signature-256");
 
     if (!secret) {
-      const error = new Error("GitHub webhook secret is not configured.");
-      error.statusCode = 500;
-      error.code = "GITHUB_WEBHOOK_CONFIG_MISSING";
-      throw error;
+      throw createError(
+        "GitHub webhook secret is not configured.",
+        500,
+        "GITHUB_WEBHOOK_CONFIG_MISSING"
+      );
     }
 
     if (!Buffer.isBuffer(req.rawBody) || !signature) {
-      const error = new Error("Missing raw webhook body or signature.");
-      error.statusCode = 401;
-      error.code = "GITHUB_WEBHOOK_SIGNATURE_MISSING";
-      throw error;
+      throw createError(
+        "Missing raw webhook body or signature.",
+        401,
+        "GITHUB_WEBHOOK_SIGNATURE_MISSING"
+      );
     }
 
     const expectedSignature =
       "sha256=" +
-      crypto.createHmac("sha256", secret).update(req.rawBody).digest("hex");
+      crypto
+        .createHmac("sha256", secret)
+        .update(req.rawBody)
+        .digest("hex");
 
     const receivedBuffer = Buffer.from(signature);
     const expectedBuffer = Buffer.from(expectedSignature);
 
     if (
       receivedBuffer.length !== expectedBuffer.length ||
-      !crypto.timingSafeEqual(receivedBuffer, expectedBuffer)
+      !crypto.timingSafeEqual(
+        receivedBuffer,
+        expectedBuffer
+      )
     ) {
-      const error = new Error("Invalid GitHub webhook signature.");
-      error.statusCode = 401;
-      error.code = "GITHUB_WEBHOOK_SIGNATURE_INVALID";
-      throw error;
+      throw createError(
+        "Invalid GitHub webhook signature.",
+        401,
+        "GITHUB_WEBHOOK_SIGNATURE_INVALID"
+      );
     }
 
     const event = req.get("x-github-event");
     const payload = req.body;
 
-    // GitHub sends this event when testing a webhook.
+    // GitHub webhook ping.
     if (event === "ping") {
       return res.status(200).json({
         success: true,
@@ -230,7 +391,7 @@ const handleGitHubWebhook = async (req, res, next) => {
       });
     }
 
-    // We currently synchronize installation lifecycle events only.
+    // Only installation lifecycle events are handled.
     if (event !== "installation") {
       return res.status(200).json({
         success: true,
@@ -242,11 +403,15 @@ const handleGitHubWebhook = async (req, res, next) => {
     const installationId = installation?.id;
     const action = payload?.action;
 
-    if (!installationId || !Number.isSafeInteger(installationId)) {
-      const error = new Error("Invalid installation ID in webhook payload.");
-      error.statusCode = 400;
-      error.code = "INVALID_GITHUB_INSTALLATION_ID";
-      throw error;
+    if (
+      !Number.isSafeInteger(installationId) ||
+      installationId <= 0
+    ) {
+      throw createError(
+        "Invalid installation ID in webhook payload.",
+        400,
+        "INVALID_GITHUB_INSTALLATION_ID"
+      );
     }
 
     let update;
@@ -282,7 +447,9 @@ const handleGitHubWebhook = async (req, res, next) => {
             contents: installation.permissions?.contents || "read",
             metadata: installation.permissions?.metadata || "read",
           },
-          status: installation.suspended_at ? "suspended" : "active",
+          status: installation.suspended_at
+            ? "suspended"
+            : "active",
           lastSyncedAt: new Date(),
         };
         break;
@@ -294,8 +461,7 @@ const handleGitHubWebhook = async (req, res, next) => {
         });
     }
 
-    // Never create an ownership link from a webhook alone.
-    // The authenticated setup callback establishes user ownership.
+    // Webhooks synchronize existing ownership links only.
     const result = await GitHubInstallation.updateOne(
       { installationId },
       { $set: update },
@@ -315,7 +481,7 @@ const handleGitHubWebhook = async (req, res, next) => {
 
 
 module.exports = {
-    startGitHubInstallation,
-    completeGitHubInstallation,
-    handleGitHubWebhook,
+  startGitHubInstallation,
+  completeGitHubInstallation,
+  handleGitHubWebhook,
 };
