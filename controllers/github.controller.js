@@ -1,4 +1,3 @@
-
 const crypto = require("crypto");
 
 const GitHubOAuthState = require("../models/githubOAuthState.model");
@@ -6,6 +5,8 @@ const GitHubInstallation = require("../models/githubInstallation.model");
 
 const {
   getInstallationDetails,
+  listInstallationRepositories,
+  uninstallGitHubInstallation,
 } = require("../services/github.service");
 
 const createError = (message, statusCode, code) => {
@@ -14,6 +15,7 @@ const createError = (message, statusCode, code) => {
   error.code = code;
   return error;
 };
+
 
 // Generate a secure GitHub App installation URL.
 const startGitHubInstallation = async (req, res, next) => {
@@ -38,7 +40,6 @@ const startGitHubInstallation = async (req, res, next) => {
       );
     }
 
-    // Generate a cryptographically secure, one-time state.
     const state = GitHubOAuthState.generateState();
 
     const stateHash = crypto
@@ -46,7 +47,6 @@ const startGitHubInstallation = async (req, res, next) => {
       .update(state)
       .digest("hex");
 
-    // Expire state after 10 minutes.
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
     await GitHubOAuthState.create({
@@ -100,7 +100,6 @@ const completeGitHubInstallation = async (req, res, next) => {
       process.env.GITHUB_MOBILE_DEEP_LINK ||
       "spareshare://github/connected";
 
-    // Only permit the registered SpareShare deep link.
     if (deepLink !== "spareshare://github/connected") {
       throw createError(
         "Invalid mobile application redirect configuration.",
@@ -114,7 +113,6 @@ const completeGitHubInstallation = async (req, res, next) => {
       .update(state)
       .digest("hex");
 
-    // Atomically consume the state once, if it has not expired.
     const savedState = await GitHubOAuthState.findOneAndDelete({
       stateHash,
       expiresAt: { $gt: new Date() },
@@ -130,7 +128,6 @@ const completeGitHubInstallation = async (req, res, next) => {
 
     const installationId = Number(installation_id);
 
-    // Verify the installation using GitHub App credentials.
     const details = await getInstallationDetails(installationId);
 
     if (
@@ -146,11 +143,9 @@ const completeGitHubInstallation = async (req, res, next) => {
       );
     }
 
-    // Check whether this installation is already linked.
     const existingInstallation =
       await GitHubInstallation.findOne({ installationId });
 
-    // Never allow an installation to be reassigned.
     if (
       existingInstallation &&
       String(existingInstallation.userId) !==
@@ -190,7 +185,6 @@ const completeGitHubInstallation = async (req, res, next) => {
       }
     );
 
-    // Prevent caching of the callback response.
     res.set({
       "Cache-Control": "no-store, no-cache, must-revalidate",
       "Pragma": "no-cache",
@@ -198,23 +192,13 @@ const completeGitHubInstallation = async (req, res, next) => {
       "Referrer-Policy": "no-referrer",
     });
 
-    // HTML success page with a manual fallback button.
     return res.status(200).type("html").send(`
       <!DOCTYPE html>
       <html lang="en">
         <head>
           <meta charset="UTF-8" />
-
-          <meta
-            name="viewport"
-            content="width=device-width, initial-scale=1.0"
-          />
-
-          <meta
-            name="robots"
-            content="noindex, nofollow"
-          />
-
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <meta name="robots" content="noindex, nofollow" />
           <title>GitHub Connected | SpareShare</title>
 
           <style>
@@ -288,9 +272,7 @@ const completeGitHubInstallation = async (req, res, next) => {
 
         <body>
           <div class="container">
-
             <div class="success">&#10003;</div>
-
             <h1>GitHub Connected!</h1>
 
             <p>
@@ -303,10 +285,7 @@ const completeGitHubInstallation = async (req, res, next) => {
               your repository and deploying your project.
             </p>
 
-            <a
-              class="button"
-              href="spareshare://github/connected"
-            >
+            <a class="button" href="spareshare://github/connected">
               Open SpareShare
             </a>
 
@@ -314,7 +293,6 @@ const completeGitHubInstallation = async (req, res, next) => {
               If the app does not open automatically,
               tap the button above.
             </p>
-
           </div>
 
           <script>
@@ -383,7 +361,6 @@ const handleGitHubWebhook = async (req, res, next) => {
     const event = req.get("x-github-event");
     const payload = req.body;
 
-    // GitHub webhook ping.
     if (event === "ping") {
       return res.status(200).json({
         success: true,
@@ -391,7 +368,6 @@ const handleGitHubWebhook = async (req, res, next) => {
       });
     }
 
-    // Only installation lifecycle events are handled.
     if (event !== "installation") {
       return res.status(200).json({
         success: true,
@@ -447,9 +423,7 @@ const handleGitHubWebhook = async (req, res, next) => {
             contents: installation.permissions?.contents || "read",
             metadata: installation.permissions?.metadata || "read",
           },
-          status: installation.suspended_at
-            ? "suspended"
-            : "active",
+          status: installation.suspended_at ? "suspended" : "active",
           lastSyncedAt: new Date(),
         };
         break;
@@ -461,7 +435,6 @@ const handleGitHubWebhook = async (req, res, next) => {
         });
     }
 
-    // Webhooks synchronize existing ownership links only.
     const result = await GitHubInstallation.updateOne(
       { installationId },
       { $set: update },
@@ -480,8 +453,181 @@ const handleGitHubWebhook = async (req, res, next) => {
 };
 
 
+// Get all GitHub installations connected to the logged-in user.
+const getGitHubConnectionStatus = async (req, res, next) => {
+  try {
+    const userId = req.user?.userId;
+
+    if (!userId) {
+      throw createError(
+        "Authentication required.",
+        401,
+        "AUTHENTICATION_REQUIRED"
+      );
+    }
+
+    const installations = await GitHubInstallation.find({
+      userId,
+    })
+      .select(
+        "installationId accountId accountLogin accountType repositorySelection status permissions installedAt lastSyncedAt"
+      )
+      .sort({ installedAt: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      connected: installations.some(
+        (installation) => installation.status === "active"
+      ),
+      installations,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
+// Get repositories accessible through a user's GitHub installation.
+const getGitHubRepositories = async (req, res, next) => {
+  try {
+    const userId = req.user?.userId;
+    const { installationId } = req.query;
+
+    if (!userId) {
+      throw createError(
+        "Authentication required.",
+        401,
+        "AUTHENTICATION_REQUIRED"
+      );
+    }
+
+    if (
+      typeof installationId !== "string" ||
+      !/^\d+$/.test(installationId) ||
+      !Number.isSafeInteger(Number(installationId)) ||
+      Number(installationId) <= 0
+    ) {
+      throw createError(
+        "A valid installationId is required.",
+        400,
+        "INVALID_INSTALLATION_ID"
+      );
+    }
+
+    const installation = await GitHubInstallation.findOne({
+      installationId: Number(installationId),
+      userId,
+    });
+
+    if (!installation) {
+      throw createError(
+        "GitHub installation not found for this account.",
+        404,
+        "GITHUB_INSTALLATION_NOT_FOUND"
+      );
+    }
+
+    if (installation.status !== "active") {
+      throw createError(
+        "This GitHub installation is not active.",
+        403,
+        "GITHUB_INSTALLATION_INACTIVE"
+      );
+    }
+
+    const repositories = await listInstallationRepositories(
+      installation.installationId
+    );
+
+    return res.status(200).json({
+      success: true,
+      installation: {
+        installationId: installation.installationId,
+        accountLogin: installation.accountLogin,
+        accountType: installation.accountType,
+      },
+      count: repositories.length,
+      repositories,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
+// Disconnect and uninstall a GitHub App installation.
+const disconnectGitHub = async (req, res, next) => {
+  try {
+    const userId = req.user?.userId;
+    const { installationId } = req.params;
+
+    if (!userId) {
+      throw createError(
+        "Authentication required.",
+        401,
+        "AUTHENTICATION_REQUIRED"
+      );
+    }
+
+    if (
+      typeof installationId !== "string" ||
+      !/^\d+$/.test(installationId) ||
+      !Number.isSafeInteger(Number(installationId)) ||
+      Number(installationId) <= 0
+    ) {
+      throw createError(
+        "Invalid GitHub installation ID.",
+        400,
+        "INVALID_INSTALLATION_ID"
+      );
+    }
+
+    const installation = await GitHubInstallation.findOne({
+      installationId: Number(installationId),
+      userId,
+    });
+
+    if (!installation) {
+      throw createError(
+        "GitHub installation not found for this account.",
+        404,
+        "GITHUB_INSTALLATION_NOT_FOUND"
+      );
+    }
+
+    if (installation.status === "uninstalled") {
+      return res.status(200).json({
+        success: true,
+        message: "GitHub installation is already disconnected.",
+      });
+    }
+
+    await uninstallGitHubInstallation(
+      installation.installationId
+    );
+
+    installation.status = "uninstalled";
+    installation.lastSyncedAt = new Date();
+
+    await installation.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "GitHub App successfully disconnected.",
+      installationId: installation.installationId,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
 module.exports = {
   startGitHubInstallation,
   completeGitHubInstallation,
   handleGitHubWebhook,
+  getGitHubConnectionStatus,
+  getGitHubRepositories,
+  disconnectGitHub,
 };

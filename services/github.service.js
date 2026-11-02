@@ -180,9 +180,43 @@ const getInstallationDetails = async (installationId) => {
 };
 
 
+const uninstallGitHubInstallation = async (installationId) => {
+  const appJwt = createAppJwt();
+
+  const response = await fetch(
+    `https://api.github.com/app/installations/${installationId}`,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${appJwt}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": API_VERSION,
+      },
+    }
+  );
+
+  // GitHub returns 204 No Content on successful uninstallation.
+  if (response.status === 204) {
+    return true;
+  }
+
+  const data = await response.json().catch(() => ({}));
+
+  const error = new Error(
+    data.message || "Failed to uninstall GitHub App installation."
+  );
+
+  error.statusCode = response.status === 404 ? 404 : 502;
+  error.code = "GITHUB_UNINSTALL_FAILED";
+
+  throw error;
+};
+
+
 module.exports = {
   createAppJwt,
   createInstallationToken,
   listInstallationRepositories,
   getInstallationDetails,
+  uninstallGitHubInstallation,
 };
