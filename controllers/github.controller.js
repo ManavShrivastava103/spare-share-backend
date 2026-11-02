@@ -143,8 +143,7 @@ const completeGitHubInstallation = async (req, res, next) => {
       );
     }
 
-    const existingInstallation =
-      await GitHubInstallation.findOne({ installationId });
+    const existingInstallation = await GitHubInstallation.findOne({ installationId });
 
     if (
       existingInstallation &&
@@ -492,7 +491,8 @@ const getGitHubConnectionStatus = async (req, res, next) => {
 const getGitHubRepositories = async (req, res, next) => {
   try {
     const userId = req.user?.userId;
-    const { installationId } = req.query;
+    const installationRecord = await GitHubInstallation.findOne({userId, status: "active"});
+    const installationId = installationRecord?.installationId;
 
     if (!userId) {
       throw createError(
@@ -560,7 +560,6 @@ const getGitHubRepositories = async (req, res, next) => {
 const disconnectGitHub = async (req, res, next) => {
   try {
     const userId = req.user?.userId;
-    const { installationId } = req.params;
 
     if (!userId) {
       throw createError(
@@ -569,6 +568,9 @@ const disconnectGitHub = async (req, res, next) => {
         "AUTHENTICATION_REQUIRED"
       );
     }
+
+    const installation = await GitHubInstallation.findOne({userId, status: "active"});
+    const installationId = installation?.installationId;
 
     if (
       typeof installationId !== "string" ||
@@ -582,11 +584,6 @@ const disconnectGitHub = async (req, res, next) => {
         "INVALID_INSTALLATION_ID"
       );
     }
-
-    const installation = await GitHubInstallation.findOne({
-      installationId: Number(installationId),
-      userId,
-    });
 
     if (!installation) {
       throw createError(

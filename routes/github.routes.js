@@ -17,6 +17,6 @@ router.get("/setup", completeGitHubInstallation);
 router.post("/webhook", handleGitHubWebhook);
 router.get("/status", authenticator(), getGitHubConnectionStatus);
 router.get("/repositories", authenticator(), getGitHubRepositories);
-router.delete("/disconnect/:installationId", authenticator(), disconnectGitHub);
+router.delete("/disconnect", authenticator(), disconnectGitHub);
 
 module.exports = router;
