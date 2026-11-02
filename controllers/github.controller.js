@@ -600,9 +600,7 @@ const disconnectGitHub = async (req, res, next) => {
       });
     }
 
-    await uninstallGitHubInstallation(
-      installation.installationId
-    );
+    await uninstallGitHubInstallation(installationId);
 
     installation.status = "uninstalled";
     installation.lastSyncedAt = new Date();
