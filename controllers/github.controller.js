@@ -492,7 +492,7 @@ const getGitHubRepositories = async (req, res, next) => {
   try {
     const userId = req.user?.userId;
     const installationRecord = await GitHubInstallation.findOne({userId, status: "active"});
-    const installationId = installationRecord?.installationId;
+    const installationId = installationRecord?.installationId?.toString();
 
     if (!userId) {
       throw createError(
@@ -570,7 +570,7 @@ const disconnectGitHub = async (req, res, next) => {
     }
 
     const installation = await GitHubInstallation.findOne({userId, status: "active"});
-    const installationId = installation?.installationId;
+    const installationId = installationRecord?.installationId?.toString();
 
     if (
       typeof installationId !== "string" ||
