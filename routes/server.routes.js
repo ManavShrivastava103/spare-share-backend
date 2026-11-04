@@ -8,6 +8,7 @@ const {
   getServerById,
   updateServer,
   deleteServer,
+  checkSlugAvailability,
 } = require("../controllers/server.controller");
 
 const authenticator = require("../middlewares/authenticator.middleware");
@@ -16,7 +17,8 @@ const authenticator = require("../middlewares/authenticator.middleware");
 router.post("/", authenticator(), createServer);
 router.get("/", authenticator(), getServers);
 router.get("/:serverId", authenticator(), getServerById);
-router.patch("/:serverId", authenticator(), updateServer);
+router.put("/:serverId", authenticator(), updateServer);
 router.delete("/:serverId", authenticator(), deleteServer);
+router.get("/check-slug", authenticator(), checkSlugAvailability);
 
 module.exports = router;
