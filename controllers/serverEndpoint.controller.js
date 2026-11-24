@@ -603,7 +603,7 @@ const createServerEndpoint = async (req, res, next) => {
 
     const endpoint = await ServerEndpoint.create({
       serverId: server._id,
-      permanentLink: generatePermanentLink(
+      permanentLink: await generatePermanentLink(
         server.slug || server.name
       ),
       redirectionLinks: normalizedLinks,

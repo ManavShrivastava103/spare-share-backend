@@ -289,7 +289,6 @@ const downloadNpm = generateRuntimeDownload({
   filename: "npm-archive.tar.gz",
 });
 
-
 // Download JDK archive.
 const downloadJdk = generateRuntimeDownload({
   name: "JDK",
@@ -304,14 +303,29 @@ const downloadPython = generateRuntimeDownload({
   filename: "python-archive.tar.gz",
 });
 
+// Download Cloudflare debian 12 ARM 64
+const downloadCloudflareDebian12ARM64 = generateRuntimeDownload({
+  name: "Cloudflare Debian 12 ARM 64",
+  objectKeyEnv: "B2_OBJECT_CLOUDFLARE_DEBIAN_12_ARM64",
+  filename: "cloudflare-debian-12-arm64-archive.tar.gz",
+});
+
+// Download Cloudflare debian 13 ARM 64
+const downloadCloudflareDebian13ARM64 = generateRuntimeDownload({
+  name: "Cloudflare Debian 13 ARM 64",
+  objectKeyEnv: "B2_OBJECT_CLOUDFLARE_DEBIAN_13_ARM64",
+  filename: "cloudflare-debian-13-arm64-archive.tar.gz",
+});
 
 
 module.exports = {
   saveDeviceInfo,
   downloadRootfs,
   generateDeviceName,
-  
+
   downloadPip,
+  downloadCloudflareDebian12ARM64,
+  downloadCloudflareDebian13ARM64,
   downloadNpm,
   downloadJdk,
   downloadPython,
