@@ -230,8 +230,89 @@ const saveDeviceInfo = async (req, res, next) => {
 
 
 
+// Generate a secure download URL for a runtime/package archive.
+const generateRuntimeDownload = (config) => {
+  return async (req, res, next) => {
+    try {
+      console.log(`[RUNTIME] ${config.name} download request received.`);
+
+      const objectKey = process.env[config.objectKeyEnv];
+
+      if (!objectKey) {
+        const error = new Error(
+          `${config.name} archive is not configured.`
+        );
+        error.statusCode = 503;
+        error.code = "RUNTIME_NOT_CONFIGURED";
+        throw error;
+      }
+
+      const downloadUrl = await generateDownloadUrl({
+        objectKey,
+        filename: config.filename,
+        expiresIn: 900,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `${config.name} download URL generated successfully.`,
+        data: {
+          name: config.name,
+          filename: config.filename,
+          downloadUrl,
+          expiresIn: 900,
+        },
+      });
+    } catch (error) {
+      console.error(
+        `[RUNTIME] ${config.name} download error:`,
+        error.message
+      );
+      next(error);
+    }
+  };
+};
+
+
+// Download pip archive.
+const downloadPip = generateRuntimeDownload({
+  name: "pip",
+  objectKeyEnv: "B2_OBJECT_PIP",
+  filename: "pip-archive.tar.gz",
+});
+
+
+// Download npm archive.
+const downloadNpm = generateRuntimeDownload({
+  name: "npm",
+  objectKeyEnv: "B2_OBJECT_NPM",
+  filename: "npm-archive.tar.gz",
+});
+
+
+// Download JDK archive.
+const downloadJdk = generateRuntimeDownload({
+  name: "JDK",
+  objectKeyEnv: "B2_OBJECT_JDK",
+  filename: "jdk-archive.tar.gz",
+});
+
+// Download Python archive.
+const downloadPython = generateRuntimeDownload({
+  name: "Python",
+  objectKeyEnv: "B2_OBJECT_PYTHON",
+  filename: "python-archive.tar.gz",
+});
+
+
+
 module.exports = {
   saveDeviceInfo,
   downloadRootfs,
   generateDeviceName,
+  
+  downloadPip,
+  downloadNpm,
+  downloadJdk,
+  downloadPython,
 };

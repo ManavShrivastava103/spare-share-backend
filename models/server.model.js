@@ -137,6 +137,11 @@ const serverSchema = new mongoose.Schema(
       default: true,
       index: true,
     },
+    
+    monitoringEnabled: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

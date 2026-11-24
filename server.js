@@ -1,20 +1,29 @@
-require("dotenv").config(); 
-const express = require("express"); 
-const connectDB = require("./config/db.config"); 
+require("dotenv").config();
 
-const authRoutes = require("./routes/auth.routes"); 
+const express = require("express");
+const connectDB = require("./config/db.config");
+
+const authRoutes = require("./routes/auth.routes");
 const installationRoutes = require("./routes/installation.routes");
 const serverRoutes = require("./routes/server.routes");
 const githubRoutes = require("./routes/github.routes");
+const serverEndpointRoutes = require("./routes/serverEndpoint.routes");
 
-const errorMiddleware = require("./middlewares/error.middleware"); 
+const serverEndpointController = require("./controllers/serverEndpoint.controller");
+
+const errorMiddleware = require("./middlewares/error.middleware");
 const initializeCounters = require("./services/counter.service");
 
-const app = express(); 
-const PORT = process.env.PORT || 5000; 
+const app = express();
+const PORT = process.env.PORT || 5000;
 
-// Middleware 
-//app.use(express.json()); 
+// Public permanent endpoint routes
+// IMPORTANT: Keep these BEFORE body-parsing middleware.
+
+app.all("/s/:permanentId", serverEndpointController.proxyTraffic);
+app.all("/s/:permanentId/*path", serverEndpointController.proxyTraffic);
+
+// Middleware
 app.use(
   express.json({
     verify: (req, res, buffer) => {
@@ -24,25 +33,31 @@ app.use(
     },
   })
 );
-app.use(express.urlencoded({ extended: true })); 
 
-// Database 
-connectDB(); 
+app.use(express.urlencoded({ extended: true }));
+
+// Database
+connectDB();
 
 // Initialize counters
 initializeCounters();
 
-// Routes 
-app.use("/api/auth", authRoutes); 
+// Routes
+app.use("/api/auth", authRoutes);
 app.use("/api/setup", installationRoutes);
 app.use("/api/server", serverRoutes);
 app.use("/api/github", githubRoutes);
 
-// Health Check 
-app.get("/", (req, res) => { return res.status(200).json({ success: true, message: "SpareShare API is running." }); }); 
+// Server Endpoint management routes
+app.use("/api/server-endpoint", serverEndpointRoutes);
 
-// Error Middleware 
+// Health Check
+app.get("/", (req, res) => {
+  return res.status(200).json({success: true, message: "SpareShare API is running.",});
+});
+
+// Error Middleware
 app.use(errorMiddleware);
 
-// Start Server 
-app.listen(PORT, () => { console.log(`Server running on port ${PORT}`); });
+// Start Server
+app.listen(PORT, () => {console.log(`Server running on port ${PORT}`)});

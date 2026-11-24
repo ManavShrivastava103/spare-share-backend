@@ -1,6 +1,6 @@
-
 const mongoose = require("mongoose");
 const Server = require("../models/server.model");
+const MonitoringData = require("../models/monitoringData.model");
 
 // Helper: create consistent application errors
 const createError = (message, statusCode, code) => {
@@ -130,6 +130,7 @@ const createServer = async (req, res, next) => {
       repository,
       resources,
       collaborators,
+      monitoringEnabled,
     } = req.body;
 
     if (typeof name !== "string" || !name.trim()) {
@@ -213,6 +214,7 @@ const createServer = async (req, res, next) => {
           ...collaboratorIds.map(String),
         ]),
       ],
+      monitoringEnabled: monitoringEnabled ?? false,
     });
 
     return res.status(201).json({
@@ -558,6 +560,343 @@ const deleteServer = async (req, res, next) => {
 };
 
 
+// ENABLE / DISABLE SERVER MONITORING
+const updateServerMonitoring = async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const { serverId } = req.params;
+    const { monitoringEnabled } = req.body;
+
+    // Validate server ID
+    if (!isValidObjectId(serverId)) {
+      throw createError(
+        "Invalid server ID.",
+        400,
+        "INVALID_SERVER_ID"
+      );
+    }
+
+    // Validate monitoring status
+    if (typeof monitoringEnabled !== "boolean") {
+      throw createError(
+        "monitoringEnabled must be a boolean.",
+        400,
+        "INVALID_MONITORING_STATUS"
+      );
+    }
+
+    // Update monitoring status
+    const server = await Server.findOneAndUpdate(
+      {
+        _id: serverId,
+        owner: userId,
+        isActive: true,
+        status: { $ne: "deleted" },
+      },
+      {
+        $set: {
+          monitoringEnabled,
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
+
+    if (!server) {
+      throw createError(
+        "Server not found or you do not have permission to manage it.",
+        404,
+        "SERVER_NOT_FOUND"
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: monitoringEnabled
+        ? "Server monitoring enabled successfully."
+        : "Server monitoring disabled successfully.",
+      data: {
+        serverId: server._id,
+        monitoringEnabled: server.monitoringEnabled,
+      },
+    });
+  } catch (error) {
+    return handleServerError(error, next);
+  }
+};
+
+
+// UPDATE SERVER RESOURCE METRICS AND HEARTBEAT
+const updateServerMetrics = async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+    const { serverId } = req.params;
+
+    if (!isValidObjectId(serverId)) {
+      throw createError(
+        "Invalid server ID.",
+        400,
+        "INVALID_SERVER_ID"
+      );
+    }
+
+    const server = await Server.findOne({
+      _id: serverId,
+      owner: userId,
+      isActive: true,
+      status: { $ne: "deleted" },
+    }).select("_id monitoringEnabled");
+
+    if (!server) {
+      throw createError(
+        "Server not found or you do not have permission to update it.",
+        404,
+        "SERVER_NOT_FOUND"
+      );
+    }
+
+    if (!server.monitoringEnabled) {
+      throw createError(
+        "Monitoring is disabled for this server.",
+        403,
+        "MONITORING_DISABLED"
+      );
+    }
+
+    const {
+      cpu,
+      memory,
+      storage,
+      network,
+      uptimeSeconds,
+    } = req.body;
+
+    const updates = {};
+
+    // Validate numeric measurements.
+    const validateMetric = (
+      value,
+      field,
+      max = Infinity,
+      min = 0
+    ) => {
+      if (
+        typeof value !== "number" ||
+        !Number.isFinite(value) ||
+        value < min ||
+        value > max
+      ) {
+        throw createError(
+          `${field} must be a valid number between ${min} and ${max}.`,
+          400,
+          "INVALID_RESOURCE_METRIC"
+        );
+      }
+    };
+
+    // Validate and prepare resource groups.
+    const processGroup = (group, fields, prefix) => {
+      if (group === undefined) return;
+
+      if (
+        !group ||
+        typeof group !== "object" ||
+        Array.isArray(group)
+      ) {
+        throw createError(
+          `${prefix} must be an object.`,
+          400,
+          "INVALID_RESOURCE_METRIC"
+        );
+      }
+
+      for (const [field, rules] of Object.entries(fields)) {
+        if (group[field] !== undefined) {
+          const { max = Infinity, min = 0 } = rules;
+
+          validateMetric(
+            group[field],
+            `${prefix}.${field}`,
+            max,
+            min
+          );
+
+          updates[`${prefix}.${field}`] = group[field];
+        }
+      }
+    };
+
+    // CPU metrics
+    processGroup(
+      cpu,
+      {
+        usagePercent: { max: 100 },
+        totalCores: { min: 1 },
+        loadAverage: {},
+      },
+      "cpu"
+    );
+
+    // Memory metrics
+    // usagePercent is calculated by the backend.
+    processGroup(
+      memory,
+      {
+        usageMb: {},
+        totalMb: {},
+      },
+      "memory"
+    );
+
+    // Storage metrics
+    // usagePercent is calculated by the backend.
+    processGroup(
+      storage,
+      {
+        usedMb: {},
+        totalMb: {},
+      },
+      "storage"
+    );
+
+    // Network metrics
+    processGroup(
+      network,
+      {
+        uploadBytes: {},
+        downloadBytes: {},
+        uploadBytesPerSecond: {},
+        downloadBytesPerSecond: {},
+      },
+      "network"
+    );
+
+    // Uptime
+    if (uptimeSeconds !== undefined) {
+      validateMetric(uptimeSeconds, "uptimeSeconds");
+      updates.uptimeSeconds = uptimeSeconds;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      throw createError(
+        "No valid resource metrics were provided.",
+        400,
+        "NO_METRICS_PROVIDED"
+      );
+    }
+
+    // Fetch existing metrics so partial updates can calculate
+    // percentages using previously stored total values.
+    const existingData = await MonitoringData.findOne({
+      serverId: server._id,
+    }).select("memory storage");
+
+    const existingMemory = existingData?.memory || {};
+    const existingStorage = existingData?.storage || {};
+
+    // Calculate RAM usage percentage.
+    const memoryUsageMb =
+      updates["memory.usageMb"] ?? existingMemory.usageMb ?? 0;
+
+    const memoryTotalMb =
+      updates["memory.totalMb"] ?? existingMemory.totalMb ?? 0;
+
+    if (memoryTotalMb > 0) {
+      if (memoryUsageMb > memoryTotalMb) {
+        throw createError(
+          "Used memory cannot exceed total memory.",
+          400,
+          "INVALID_MEMORY_USAGE"
+        );
+      }
+
+      if (
+        updates["memory.usageMb"] !== undefined ||
+        updates["memory.totalMb"] !== undefined
+      ) {
+        updates["memory.usagePercent"] =
+          (memoryUsageMb / memoryTotalMb) * 100;
+      }
+    } else if (memoryUsageMb > 0) {
+      throw createError(
+        "Total memory must be greater than zero when memory is in use.",
+        400,
+        "INVALID_TOTAL_MEMORY"
+      );
+    }
+
+    // Calculate storage usage percentage.
+    const storageUsedMb =
+      updates["storage.usedMb"] ?? existingStorage.usedMb ?? 0;
+
+    const storageTotalMb =
+      updates["storage.totalMb"] ?? existingStorage.totalMb ?? 0;
+
+    if (storageTotalMb > 0) {
+      if (storageUsedMb > storageTotalMb) {
+        throw createError(
+          "Used storage cannot exceed total storage.",
+          400,
+          "INVALID_STORAGE_USAGE"
+        );
+      }
+
+      if (
+        updates["storage.usedMb"] !== undefined ||
+        updates["storage.totalMb"] !== undefined
+      ) {
+        updates["storage.usagePercent"] =
+          (storageUsedMb / storageTotalMb) * 100;
+      }
+    } else if (storageUsedMb > 0) {
+      throw createError(
+        "Total storage must be greater than zero when storage is in use.",
+        400,
+        "INVALID_TOTAL_STORAGE"
+      );
+    }
+
+    // Update heartbeat timestamp.
+    updates.lastHeartbeatAt = new Date();
+
+    const monitoringData = await MonitoringData.findOneAndUpdate(
+      { serverId: server._id },
+      {
+        $set: updates,
+        $setOnInsert: {
+          serverId: server._id,
+          health: "unknown",
+        },
+      },
+      {
+        new: true,
+        upsert: true,
+        runValidators: true,
+        setDefaultsOnInsert: true,
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Server metrics updated successfully.",
+      data: {
+        serverId: server._id,
+        cpu: monitoringData.cpu,
+        memory: monitoringData.memory,
+        storage: monitoringData.storage,
+        network: monitoringData.network,
+        uptimeSeconds: monitoringData.uptimeSeconds,
+        lastHeartbeatAt: monitoringData.lastHeartbeatAt,
+      },
+    });
+  } catch (error) {
+    return handleServerError(error, next);
+  }
+};
+
+
 module.exports = {
   createServer,
   getServers,
@@ -565,4 +904,6 @@ module.exports = {
   updateServer,
   deleteServer,
   checkSlugAvailability,
+  updateServerMonitoring,
+  updateServerMetrics,
 };

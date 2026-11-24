@@ -1,4 +1,99 @@
+
 const mongoose = require("mongoose");
+
+// Per-minute traffic bucket
+const minuteBucketSchema = new mongoose.Schema(
+  {
+    minute: {
+      type: Date,
+      required: true,
+    },
+
+    requests: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    successfulRequests: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    failedRequests: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    bytesIn: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    bytesOut: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    responseTimeMs: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+  },
+  { _id: false }
+);
+
+// Per-endpoint traffic statistics
+const endpointStatSchema = new mongoose.Schema(
+  {
+    method: {
+      type: String,
+      required: true,
+      uppercase: true,
+      trim: true,
+    },
+
+    path: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    requests: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    successfulRequests: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    failedRequests: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    totalResponseTimeMs: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    lastCalledAt: {
+      type: Date,
+    },
+  },
+  { _id: false }
+);
 
 const monitoringDataSchema = new mongoose.Schema(
   {
@@ -12,16 +107,12 @@ const monitoringDataSchema = new mongoose.Schema(
 
     health: {
       type: String,
-      enum: [
-        "healthy",
-        "degraded",
-        "down",
-        "unknown",
-      ],
+      enum: ["healthy", "degraded", "down", "unknown"],
       default: "unknown",
       index: true,
     },
 
+    // CPU resource metrics
     cpu: {
       usagePercent: {
         type: Number,
@@ -30,12 +121,18 @@ const monitoringDataSchema = new mongoose.Schema(
         default: 0,
       },
 
+      totalCores: {
+        type: Number,
+        min: 1,
+      },
+
       loadAverage: {
         type: Number,
         min: 0,
       },
     },
 
+    // RAM resource metrics
     memory: {
       usageMb: {
         type: Number,
@@ -57,6 +154,7 @@ const monitoringDataSchema = new mongoose.Schema(
       },
     },
 
+    // Storage resource metrics
     storage: {
       usedMb: {
         type: Number,
@@ -78,7 +176,9 @@ const monitoringDataSchema = new mongoose.Schema(
       },
     },
 
+    // Network resource metrics
     network: {
+      // Cumulative transferred data
       uploadBytes: {
         type: Number,
         min: 0,
@@ -90,14 +190,87 @@ const monitoringDataSchema = new mongoose.Schema(
         min: 0,
         default: 0,
       },
+
+      // Current measured transfer rates
+      uploadBytesPerSecond: {
+        type: Number,
+        min: 0,
+        default: 0,
+      },
+
+      downloadBytesPerSecond: {
+        type: Number,
+        min: 0,
+        default: 0,
+      },
     },
 
+    // Total server uptime
     uptimeSeconds: {
       type: Number,
       min: 0,
       default: 0,
     },
 
+    // Traffic totals collected by the permanent endpoint proxy
+    traffic: {
+      totalRequests: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      successfulRequests: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      failedRequests: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      bytesIn: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      bytesOut: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      totalResponseTimeMs: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      // HTTP method-wise request counts
+      methods: {
+        type: Map,
+        of: Number,
+        default: {},
+      },
+
+      // Retain only the latest 60 minute buckets
+      minuteBuckets: {
+        type: [minuteBucketSchema],
+        default: [],
+      },
+
+      // Retain at most 100 distinct endpoint paths
+      endpointStats: {
+        type: [endpointStatSchema],
+        default: [],
+      },
+    },
+
+    // Last successful device monitoring update
     lastHeartbeatAt: {
       type: Date,
       required: true,
@@ -114,9 +287,4 @@ const monitoringDataSchema = new mongoose.Schema(
   }
 );
 
-module.exports =
-  mongoose.models.MonitoringData ||
-  mongoose.model(
-    "MonitoringData",
-    monitoringDataSchema
-  );
+module.exports = mongoose.models.MonitoringData || mongoose.model("MonitoringData", monitoringDataSchema);

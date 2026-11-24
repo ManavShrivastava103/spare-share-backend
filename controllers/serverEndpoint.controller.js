@@ -1,14 +1,25 @@
-
 const mongoose = require("mongoose");
 const crypto = require("crypto");
+const httpProxy = require("http-proxy");
+const net = require("net");
 
 const Server = require("../models/server.model");
 const ServerEndpoint = require("../models/serverEndpoint.model");
 const MonitoringData = require("../models/monitoringData.model");
 
+const proxy = httpProxy.createProxyServer({
+  changeOrigin: true,
+  xfwd: true,
+  secure: true,
+  proxyTimeout: 30000,
+  timeout: 30000,
+  prependPath: false,
+  cookieDomainRewrite: "",
+});
+
 // Create consistent application errors
 const createError = (message, statusCode, code) => {
-  const e0rror = new Error(message);
+  const error = new Error(message);
   error.statusCode = statusCode;
   error.code = code;
   return error;
@@ -30,52 +41,101 @@ const handleEndpointError = (error, next) => {
   }
 
   if (error.name === "ValidationError") {
-    return next(createError(error.message, 400, "VALIDATION_ERROR"));
+    return next(
+      createError(error.message, 400, "VALIDATION_ERROR")
+    );
   }
 
-  next(error);
+  return next(error);
 };
 
 // Get authenticated user ID
 const getUserId = (req) => {
   const userId = req.user?.userId;
+
   if (!userId) {
-    throw createError("Authentication is required.", 401, "UNAUTHORIZED");
+    throw createError(
+      "Authentication is required.",
+      401,
+      "UNAUTHORIZED"
+    );
   }
+
   if (!isValidObjectId(userId)) {
-    throw createError("Invalid authenticated user ID.", 401, "INVALID_USER_ID");
+    throw createError(
+      "Invalid authenticated user ID.",
+      401,
+      "INVALID_USER_ID"
+    );
   }
+
   return userId;
 };
 
-// Normalize a slug
+// Normalize slug
 const createSlug = (value) => {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 100);
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 100);
 };
 
-// Generate a permanent endpoint identifier
-const generatePermanentId = (slug) => {
-  const normalizedSlug = createSlug(slug) || "server";
-  const randomSuffix = crypto.randomBytes(4).toString("hex");
-  return `${normalizedSlug}-${randomSuffix}`;
-};
-
-// Get the configured public endpoint base URL
+// Get public URL base
 const getPublicBaseUrl = () => {
-  const baseUrl = process.env.SPARESHARE_PUBLIC_BASE_URL || "https://api.spareshare.in/s";
-  return baseUrl.replace(/\/+$/, "");
+  const value = process.env.SPARESHARE_PUBLIC_BASE_URL;
+
+  if (!value) {
+    throw createError(
+      "SPARESHARE_PUBLIC_BASE_URL is not configured.",
+      500,
+      "PUBLIC_BASE_URL_NOT_CONFIGURED"
+    );
+  }
+
+  let parsedUrl;
+
+  try {
+    parsedUrl = new URL(value);
+  } catch {
+    throw createError(
+      "SPARESHARE_PUBLIC_BASE_URL is invalid.",
+      500,
+      "INVALID_PUBLIC_BASE_URL"
+    );
+  }
+
+  if (
+    parsedUrl.protocol !== "https:" &&
+    process.env.NODE_ENV === "production"
+  ) {
+    throw createError(
+      "The public endpoint base URL must use HTTPS.",
+      500,
+      "PUBLIC_HTTPS_REQUIRED"
+    );
+  }
+
+  return value.replace(/\/+$/, "");
 };
 
-// Generate the permanent link
+// Generate permanent link
 const generatePermanentLink = (slug) => {
-  const permanentId = generatePermanentId(slug);
-  return `${getPublicBaseUrl()}/${permanentId}`;
+  const normalizedSlug = createSlug(slug) || "server";
+  const suffix = crypto.randomBytes(5).toString("hex");
+
+  return `${getPublicBaseUrl()}/${normalizedSlug}-${suffix}`;
 };
 
-// Validate a destination URL
+// Validate destination URL
 const validateDestinationLink = (value, httpsOnly = true) => {
   if (typeof value !== "string" || !value.trim()) {
-    throw createError("A valid destination link is required.", 400, "INVALID_DESTINATION_LINK");
+    throw createError(
+      "A valid destination link is required.",
+      400,
+      "INVALID_DESTINATION_LINK"
+    );
   }
 
   let parsedUrl;
@@ -92,7 +152,7 @@ const validateDestinationLink = (value, httpsOnly = true) => {
 
   if (!["http:", "https:"].includes(parsedUrl.protocol)) {
     throw createError(
-      "Only HTTP and HTTPS destination links are supported.",
+      "Only HTTP and HTTPS destinations are supported.",
       400,
       "INVALID_DESTINATION_PROTOCOL"
     );
@@ -114,18 +174,15 @@ const validateDestinationLink = (value, httpsOnly = true) => {
     );
   }
 
-  const hostname = parsedUrl.hostname.toLowerCase();
-
-  const blockedHostnames = [
-    "localhost",
-    "localhost.localdomain",
-    "metadata.google.internal",
-  ];
+  const hostname = parsedUrl.hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "");
 
   if (
-    blockedHostnames.includes(hostname) ||
+    hostname === "localhost" ||
     hostname.endsWith(".localhost") ||
-    hostname.endsWith(".local")
+    hostname.endsWith(".local") ||
+    hostname === "metadata.google.internal"
   ) {
     throw createError(
       "Local and internal destinations are not allowed.",
@@ -134,36 +191,46 @@ const validateDestinationLink = (value, httpsOnly = true) => {
     );
   }
 
-  // Block private and loopback IPv4 literals
-  const ipv4Match = hostname.match(
-    /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
-  );
+  // Reject private and reserved IPv4 destinations
+  if (net.isIP(hostname) === 4) {
+    const [a, b, c] = hostname.split(".").map(Number);
 
-  if (ipv4Match) {
-    const octets = ipv4Match.slice(1).map(Number);
+    const blocked =
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      a >= 224 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 192 && b === 0 && c === 0);
 
-    if (octets.some((octet) => octet > 255)) {
+    if (blocked) {
       throw createError(
-        "Invalid destination IP address.",
+        "Private or reserved IP destinations are not allowed.",
         400,
         "INVALID_DESTINATION_HOST"
       );
     }
+  }
 
-    const [a, b] = octets;
+  // Reject loopback, private and link-local IPv6 addresses
+  if (net.isIP(hostname) === 6) {
+    const normalized = hostname.toLowerCase();
 
-    const isPrivateOrReserved =
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      a >= 224;
-
-    if (isPrivateOrReserved) {
+    if (
+      normalized === "::1" ||
+      normalized === "::" ||
+      normalized.startsWith("fc") ||
+      normalized.startsWith("fd") ||
+      normalized.startsWith("fe8") ||
+      normalized.startsWith("fe9") ||
+      normalized.startsWith("fea") ||
+      normalized.startsWith("feb")
+    ) {
       throw createError(
-        "Private, loopback, and reserved IP destinations are not allowed.",
+        "Private or reserved IPv6 destinations are not allowed.",
         400,
         "INVALID_DESTINATION_HOST"
       );
@@ -173,12 +240,201 @@ const validateDestinationLink = (value, httpsOnly = true) => {
   return parsedUrl.toString();
 };
 
-// Increment configuration version whenever routing settings change
+// Increment routing configuration version
 const updateConfigVersion = (endpoint) => {
   endpoint.configVersion = (endpoint.configVersion || 1) + 1;
 };
 
-// Verify that the authenticated user owns the server
+
+const normalizeEndpointPath = (path) => {
+  return path
+    .replace(/\/[0-9a-f]{24}(?=\/|$)/gi, "/:id")
+    .replace(/\/\d+(?=\/|$)/g, "/:id");
+};
+
+const recordProxyTraffic = async ({
+  serverId,
+  method,
+  path,
+  statusCode,
+  durationMs,
+  bytesIn,
+  bytesOut,
+}) => {
+  try {
+    const now = new Date();
+
+    const minute = new Date(now);
+    minute.setSeconds(0, 0);
+
+    const successful = statusCode >= 200 && statusCode < 400;
+    const failed = statusCode >= 400;
+
+    const normalizedMethod = method.toUpperCase();
+    const normalizedPath = normalizeEndpointPath(path);
+
+    // Ensure the monitoring document exists.
+    // Do not refresh lastHeartbeatAt from proxy traffic.
+    await MonitoringData.updateOne(
+      { serverId },
+      {
+        $setOnInsert: {
+          serverId,
+          health: "unknown",
+          lastHeartbeatAt: now,
+        },
+      },
+      { upsert: true }
+    );
+
+    // Update cumulative traffic counters.
+    const increments = {
+      "traffic.totalRequests": 1,
+      "traffic.bytesIn": bytesIn,
+      "traffic.bytesOut": bytesOut,
+      "traffic.totalResponseTimeMs": durationMs,
+      [`traffic.methods.${normalizedMethod}`]: 1,
+    };
+
+    if (successful) {
+      increments["traffic.successfulRequests"] = 1;
+    }
+
+    if (failed) {
+      increments["traffic.failedRequests"] = 1;
+    }
+
+    await MonitoringData.updateOne(
+      { serverId },
+      { $inc: increments }
+    );
+
+    // Update or create the current minute bucket.
+    const existingBucket = await MonitoringData.exists({
+      serverId,
+      "traffic.minuteBuckets.minute": minute,
+    });
+
+    const bucketIncrement = {
+      "traffic.minuteBuckets.$.requests": 1,
+      "traffic.minuteBuckets.$.bytesIn": bytesIn,
+      "traffic.minuteBuckets.$.bytesOut": bytesOut,
+      "traffic.minuteBuckets.$.responseTimeMs": durationMs,
+    };
+
+    if (successful) {
+      bucketIncrement[
+        "traffic.minuteBuckets.$.successfulRequests"
+      ] = 1;
+    }
+
+    if (failed) {
+      bucketIncrement[
+        "traffic.minuteBuckets.$.failedRequests"
+      ] = 1;
+    }
+
+    if (existingBucket) {
+      await MonitoringData.updateOne(
+        {
+          serverId,
+          "traffic.minuteBuckets.minute": minute,
+        },
+        { $inc: bucketIncrement }
+      );
+    } else {
+      await MonitoringData.updateOne(
+        { serverId },
+        {
+          $push: {
+            "traffic.minuteBuckets": {
+              $each: [
+                {
+                  minute,
+                  requests: 1,
+                  successfulRequests: successful ? 1 : 0,
+                  failedRequests: failed ? 1 : 0,
+                  bytesIn,
+                  bytesOut,
+                  responseTimeMs: durationMs,
+                },
+              ],
+              $slice: -60,
+            },
+          },
+        }
+      );
+    }
+
+    // Update or create endpoint statistics.
+    const existingEndpoint = await MonitoringData.exists({
+      serverId,
+      "traffic.endpointStats.method": normalizedMethod,
+      "traffic.endpointStats.path": normalizedPath,
+    });
+
+    if (existingEndpoint) {
+      const endpointIncrement = {
+        "traffic.endpointStats.$.requests": 1,
+        "traffic.endpointStats.$.totalResponseTimeMs": durationMs,
+      };
+
+      if (successful) {
+        endpointIncrement[
+          "traffic.endpointStats.$.successfulRequests"
+        ] = 1;
+      }
+
+      if (failed) {
+        endpointIncrement[
+          "traffic.endpointStats.$.failedRequests"
+        ] = 1;
+      }
+
+      await MonitoringData.updateOne(
+        {
+          serverId,
+          "traffic.endpointStats.method": normalizedMethod,
+          "traffic.endpointStats.path": normalizedPath,
+        },
+        {
+          $inc: endpointIncrement,
+          $set: {
+            "traffic.endpointStats.$.lastCalledAt": now,
+          },
+        }
+      );
+    } else {
+      await MonitoringData.updateOne(
+        { serverId },
+        {
+          $push: {
+            "traffic.endpointStats": {
+              $each: [
+                {
+                  method: normalizedMethod,
+                  path: normalizedPath,
+                  requests: 1,
+                  successfulRequests: successful ? 1 : 0,
+                  failedRequests: failed ? 1 : 0,
+                  totalResponseTimeMs: durationMs,
+                  lastCalledAt: now,
+                },
+              ],
+              $slice: -100,
+            },
+          },
+        }
+      );
+    }
+  } catch (error) {
+    // Monitoring failure must not interrupt customer traffic.
+    console.error("Proxy traffic monitoring failed:", error.message);
+  }
+};
+
+
+// Verify server ownership
 const getOwnedServer = async (userId, serverId) => {
   if (!isValidObjectId(serverId)) {
     throw createError(
@@ -206,7 +462,7 @@ const getOwnedServer = async (userId, serverId) => {
   return server;
 };
 
-// Get an endpoint after verifying server ownership
+// Get owned endpoint
 const getOwnedEndpoint = async (userId, serverId) => {
   const server = await getOwnedServer(userId, serverId);
 
@@ -225,50 +481,30 @@ const getOwnedEndpoint = async (userId, serverId) => {
   return { server, endpoint };
 };
 
-// Find an optional mapping by device ID and optional user ID
-const findOptionalLinkIndex = (endpoint, deviceId, userId) => {
-  const matchingIndexes = [];
-
-  endpoint.optionalLinks.forEach((link, index) => {
-    const deviceMatches =
-      link.deviceId.toString() === deviceId;
-
-    const userMatches =
-      !userId || link.userId.toString() === userId;
-
-    if (deviceMatches && userMatches) {
-      matchingIndexes.push(index);
-    }
-  });
-
-  if (matchingIndexes.length > 1) {
-    throw createError(
-      "Multiple mappings exist for this device. Provide the userId to identify the correct mapping.",
-      400,
-      "AMBIGUOUS_OPTIONAL_LINK"
+// Find a mapping
+const findMappingIndex = (endpoint, deviceId, userId) => {
+  return endpoint.redirectionLinks.findIndex((link) => {
+    return (
+      link.deviceId.toString() === deviceId &&
+      link.userId.toString() === userId
     );
-  }
-
-  return matchingIndexes.length === 1
-    ? matchingIndexes[0]
-    : -1;
+  });
 };
-
 
 // CREATE SERVER ENDPOINT
 const createServerEndpoint = async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const { serverId } = req.params;
-    const { redirectionLink, routingMode } = req.body;
+    const { redirectionLinks, routingMode } = req.body;
 
     const server = await getOwnedServer(userId, serverId);
 
-    const existingEndpoint = await ServerEndpoint.exists({
+    const existing = await ServerEndpoint.exists({
       serverId: server._id,
     });
 
-    if (existingEndpoint) {
+    if (existing) {
       throw createError(
         "An endpoint already exists for this server.",
         409,
@@ -276,9 +512,10 @@ const createServerEndpoint = async (req, res, next) => {
       );
     }
 
-    const normalizedRoutingMode = routingMode || "proxy";
-
-    if (!["redirect", "proxy"].includes(normalizedRoutingMode)) {
+    if (
+      routingMode !== undefined &&
+      !["redirect", "proxy"].includes(routingMode)
+    ) {
       throw createError(
         "Invalid routing mode.",
         400,
@@ -286,39 +523,76 @@ const createServerEndpoint = async (req, res, next) => {
       );
     }
 
-    const normalizedDestination = validateDestinationLink(
-      redirectionLink,
-      true
-    );
+    if (
+      redirectionLinks !== undefined &&
+      !Array.isArray(redirectionLinks)
+    ) {
+      throw createError(
+        "Redirection links must be an array.",
+        400,
+        "INVALID_REDIRECTION_LINKS"
+      );
+    }
 
-    const permanentLink = generatePermanentLink(
-      server.slug || server.name
-    );
+    const normalizedLinks = (redirectionLinks || []).map((link) => {
+      if (!isValidObjectId(link.userId)) {
+        throw createError(
+          "Invalid mapped user ID.",
+          400,
+          "INVALID_MAPPED_USER_ID"
+        );
+      }
+
+      if (!isValidObjectId(link.deviceId)) {
+        throw createError(
+          "Invalid device ID.",
+          400,
+          "INVALID_DEVICE_ID"
+        );
+      }
+
+      if (
+        link.priority !== undefined &&
+        (!Number.isInteger(link.priority) || link.priority < 1)
+      ) {
+        throw createError(
+          "Priority must be a positive integer.",
+          400,
+          "INVALID_PRIORITY"
+        );
+      }
+
+      return {
+        userId: link.userId,
+        deviceId: link.deviceId,
+        destinationLink: validateDestinationLink(link.destinationLink),
+        priority: link.priority ?? 1,
+        isActive: link.isActive ?? true,
+      };
+    });
 
     const endpoint = await ServerEndpoint.create({
       serverId: server._id,
-      permanentLink,
-      redirectionLink: normalizedDestination,
-      optionalLinks: [],
+      permanentLink: generatePermanentLink(
+        server.slug || server.name
+      ),
+      redirectionLinks: normalizedLinks,
+      routingMode: routingMode || "proxy",
       isActive: true,
       configVersion: 1,
-      routingMode: normalizedRoutingMode,
     });
 
     return res.status(201).json({
       success: true,
       message: "Server endpoint created successfully.",
-      data: {
-        endpoint,
-      },
+      data: { endpoint },
     });
   } catch (error) {
     return handleEndpointError(error, next);
   }
 };
 
-
-// GET SERVER ENDPOINT BY SERVER ID
+// GET SERVER ENDPOINT
 const getServerEndpoint = async (req, res, next) => {
   try {
     const userId = getUserId(req);
@@ -332,17 +606,14 @@ const getServerEndpoint = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: "Server endpoint fetched successfully.",
-      data: {
-        endpoint,
-      },
+      data: { endpoint },
     });
   } catch (error) {
     return next(error);
   }
 };
 
-
-// GET ALL SERVER ENDPOINTS OWNED BY USER
+// GET ALL SERVER ENDPOINTS
 const getServerEndpoints = async (req, res, next) => {
   try {
     const userId = getUserId(req);
@@ -351,7 +622,7 @@ const getServerEndpoints = async (req, res, next) => {
       owner: userId,
       isActive: true,
       status: { $ne: "deleted" },
-    }).select("_id name slug status");
+    }).select("_id");
 
     const serverIds = servers.map((server) => server._id);
 
@@ -365,18 +636,15 @@ const getServerEndpoints = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: "Server endpoints fetched successfully.",
-      data: {
-        endpoints,
-      },
+      data: { endpoints },
     });
   } catch (error) {
     return next(error);
   }
 };
 
-
-// ADD OPTIONAL LINK
-const addOptionalLink = async (req, res, next) => {
+// ADD REDIRECTION LINK
+const addRedirectionLink = async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const { serverId } = req.params;
@@ -393,17 +661,17 @@ const addOptionalLink = async (req, res, next) => {
       serverId
     );
 
-    if (!mappedUserId || !isValidObjectId(mappedUserId)) {
+    if (!isValidObjectId(mappedUserId)) {
       throw createError(
-        "A valid mapped user ID is required.",
+        "Invalid mapped user ID.",
         400,
         "INVALID_MAPPED_USER_ID"
       );
     }
 
-    if (!deviceId || !isValidObjectId(deviceId)) {
+    if (!isValidObjectId(deviceId)) {
       throw createError(
-        "A valid device ID is required.",
+        "Invalid device ID.",
         400,
         "INVALID_DEVICE_ID"
       );
@@ -411,10 +679,7 @@ const addOptionalLink = async (req, res, next) => {
 
     if (
       priority !== undefined &&
-      (
-        !Number.isInteger(priority) ||
-        priority < 1
-      )
+      (!Number.isInteger(priority) || priority < 1)
     ) {
       throw createError(
         "Priority must be a positive integer.",
@@ -423,12 +688,7 @@ const addOptionalLink = async (req, res, next) => {
       );
     }
 
-    const normalizedDestination = validateDestinationLink(
-      destinationLink,
-      endpoint.security?.httpsOnly !== false
-    );
-
-    const duplicate = endpoint.optionalLinks.some(
+    const duplicate = endpoint.redirectionLinks.some(
       (link) =>
         link.userId.toString() === mappedUserId &&
         link.deviceId.toString() === deviceId
@@ -436,16 +696,19 @@ const addOptionalLink = async (req, res, next) => {
 
     if (duplicate) {
       throw createError(
-        "An optional link already exists for this user and device.",
+        "A mapping already exists for this user and device.",
         409,
-        "OPTIONAL_LINK_ALREADY_EXISTS"
+        "REDIRECTION_LINK_ALREADY_EXISTS"
       );
     }
 
-    endpoint.optionalLinks.push({
+    endpoint.redirectionLinks.push({
       userId: mappedUserId,
       deviceId,
-      destinationLink: normalizedDestination,
+      destinationLink: validateDestinationLink(
+        destinationLink,
+        endpoint.security.httpsOnly
+      ),
       priority: priority ?? 1,
       isActive: true,
     });
@@ -456,9 +719,9 @@ const addOptionalLink = async (req, res, next) => {
 
     return res.status(201).json({
       success: true,
-      message: "Optional link added successfully.",
+      message: "Redirection link added successfully.",
       data: {
-        optionalLinks: endpoint.optionalLinks,
+        redirectionLinks: endpoint.redirectionLinks,
         configVersion: endpoint.configVersion,
       },
     });
@@ -467,9 +730,8 @@ const addOptionalLink = async (req, res, next) => {
   }
 };
 
-
-// UPDATE OPTIONAL LINK
-const updateOptionalLink = async (req, res, next) => {
+// UPDATE REDIRECTION LINK
+const updateRedirectionLink = async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const { serverId, deviceId } = req.params;
@@ -483,9 +745,9 @@ const updateOptionalLink = async (req, res, next) => {
       );
     }
 
-    if (mappedUserId && !isValidObjectId(mappedUserId)) {
+    if (!isValidObjectId(mappedUserId)) {
       throw createError(
-        "Invalid mapped user ID.",
+        "A valid mapped user ID is required.",
         400,
         "INVALID_MAPPED_USER_ID"
       );
@@ -496,45 +758,27 @@ const updateOptionalLink = async (req, res, next) => {
       serverId
     );
 
-    const linkIndex = findOptionalLinkIndex(
+    const index = findMappingIndex(
       endpoint,
       deviceId,
       mappedUserId
     );
 
-    if (linkIndex === -1) {
+    if (index === -1) {
       throw createError(
-        "Optional link not found.",
+        "Redirection link not found.",
         404,
-        "OPTIONAL_LINK_NOT_FOUND"
+        "REDIRECTION_LINK_NOT_FOUND"
       );
     }
 
     const updates = req.body;
-    const allowedFields = [
-      "destinationLink",
-      "priority",
-      "isActive",
-    ];
-
-    const updateFields = Object.keys(updates).filter(
-      (field) => allowedFields.includes(field)
-    );
-
-    if (updateFields.length === 0) {
-      throw createError(
-        "No valid optional link fields provided.",
-        400,
-        "NO_VALID_UPDATE_FIELDS"
-      );
-    }
-
-    const link = endpoint.optionalLinks[linkIndex];
+    const link = endpoint.redirectionLinks[index];
 
     if (updates.destinationLink !== undefined) {
       link.destinationLink = validateDestinationLink(
         updates.destinationLink,
-        endpoint.security?.httpsOnly !== false
+        endpoint.security.httpsOnly
       );
     }
 
@@ -558,7 +802,7 @@ const updateOptionalLink = async (req, res, next) => {
         throw createError(
           "isActive must be a boolean.",
           400,
-          "INVALID_OPTIONAL_LINK_STATUS"
+          "INVALID_LINK_STATUS"
         );
       }
 
@@ -571,9 +815,9 @@ const updateOptionalLink = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      message: "Optional link updated successfully.",
+      message: "Redirection link updated successfully.",
       data: {
-        optionalLink: endpoint.optionalLinks[linkIndex],
+        redirectionLink: endpoint.redirectionLinks[index],
         configVersion: endpoint.configVersion,
       },
     });
@@ -582,27 +826,21 @@ const updateOptionalLink = async (req, res, next) => {
   }
 };
 
-
-// REMOVE OPTIONAL LINK
-const removeOptionalLink = async (req, res, next) => {
+// REMOVE REDIRECTION LINK
+const removeRedirectionLink = async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const { serverId, deviceId } = req.params;
     const { userId: mappedUserId } = req.query;
 
-    if (!isValidObjectId(deviceId)) {
+    if (
+      !isValidObjectId(deviceId) ||
+      !isValidObjectId(mappedUserId)
+    ) {
       throw createError(
-        "Invalid device ID.",
+        "Valid device ID and mapped user ID are required.",
         400,
-        "INVALID_DEVICE_ID"
-      );
-    }
-
-    if (mappedUserId && !isValidObjectId(mappedUserId)) {
-      throw createError(
-        "Invalid mapped user ID.",
-        400,
-        "INVALID_MAPPED_USER_ID"
+        "INVALID_MAPPING_ID"
       );
     }
 
@@ -611,21 +849,21 @@ const removeOptionalLink = async (req, res, next) => {
       serverId
     );
 
-    const linkIndex = findOptionalLinkIndex(
+    const index = findMappingIndex(
       endpoint,
       deviceId,
       mappedUserId
     );
 
-    if (linkIndex === -1) {
+    if (index === -1) {
       throw createError(
-        "Optional link not found.",
+        "Redirection link not found.",
         404,
-        "OPTIONAL_LINK_NOT_FOUND"
+        "REDIRECTION_LINK_NOT_FOUND"
       );
     }
 
-    endpoint.optionalLinks.splice(linkIndex, 1);
+    endpoint.redirectionLinks.splice(index, 1);
 
     updateConfigVersion(endpoint);
 
@@ -633,9 +871,9 @@ const removeOptionalLink = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      message: "Optional link removed successfully.",
+      message: "Redirection link removed successfully.",
       data: {
-        optionalLinks: endpoint.optionalLinks,
+        redirectionLinks: endpoint.redirectionLinks,
         configVersion: endpoint.configVersion,
       },
     });
@@ -643,113 +881,6 @@ const removeOptionalLink = async (req, res, next) => {
     return handleEndpointError(error, next);
   }
 };
-
-
-// UPDATE OPTIONAL LINK PRIORITY
-const updateOptionalLinkPriority = async (req, res, next) => {
-  try {
-    const userId = getUserId(req);
-    const { serverId, deviceId } = req.params;
-    const { userId: mappedUserId } = req.query;
-    const { priority } = req.body;
-
-    if (!isValidObjectId(deviceId)) {
-      throw createError(
-        "Invalid device ID.",
-        400,
-        "INVALID_DEVICE_ID"
-      );
-    }
-
-    if (mappedUserId && !isValidObjectId(mappedUserId)) {
-      throw createError(
-        "Invalid mapped user ID.",
-        400,
-        "INVALID_MAPPED_USER_ID"
-      );
-    }
-
-    if (!Number.isInteger(priority) || priority < 1) {
-      throw createError(
-        "Priority must be a positive integer.",
-        400,
-        "INVALID_PRIORITY"
-      );
-    }
-
-    const { endpoint } = await getOwnedEndpoint(
-      userId,
-      serverId
-    );
-
-    const linkIndex = findOptionalLinkIndex(
-      endpoint,
-      deviceId,
-      mappedUserId
-    );
-
-    if (linkIndex === -1) {
-      throw createError(
-        "Optional link not found.",
-        404,
-        "OPTIONAL_LINK_NOT_FOUND"
-      );
-    }
-
-    endpoint.optionalLinks[linkIndex].priority = priority;
-
-    updateConfigVersion(endpoint);
-
-    await endpoint.save();
-
-    return res.status(200).json({
-      success: true,
-      message: "Optional link priority updated successfully.",
-      data: {
-        optionalLink: endpoint.optionalLinks[linkIndex],
-        configVersion: endpoint.configVersion,
-      },
-    });
-  } catch (error) {
-    return handleEndpointError(error, next);
-  }
-};
-
-
-// UPDATE PRIMARY REDIRECTION LINK
-const updateRedirectionLink = async (req, res, next) => {
-  try {
-    const userId = getUserId(req);
-    const { serverId } = req.params;
-    const { redirectionLink } = req.body;
-
-    const { endpoint } = await getOwnedEndpoint(
-      userId,
-      serverId
-    );
-
-    endpoint.redirectionLink = validateDestinationLink(
-      redirectionLink,
-      endpoint.security?.httpsOnly !== false
-    );
-
-    updateConfigVersion(endpoint);
-
-    await endpoint.save();
-
-    return res.status(200).json({
-      success: true,
-      message: "Primary redirection link updated successfully.",
-      data: {
-        redirectionLink: endpoint.redirectionLink,
-        configVersion: endpoint.configVersion,
-      },
-    });
-  } catch (error) {
-    return handleEndpointError(error, next);
-  }
-};
-
 
 // UPDATE ROUTING MODE
 const updateRoutingMode = async (req, res, next) => {
@@ -760,7 +891,7 @@ const updateRoutingMode = async (req, res, next) => {
 
     if (!["redirect", "proxy"].includes(routingMode)) {
       throw createError(
-        "Routing mode must be either redirect or proxy.",
+        "Routing mode must be redirect or proxy.",
         400,
         "INVALID_ROUTING_MODE"
       );
@@ -790,60 +921,46 @@ const updateRoutingMode = async (req, res, next) => {
   }
 };
 
-
-// UPDATE ENDPOINT SECURITY SETTINGS
+// UPDATE SECURITY SETTINGS
 const updateEndpointSecurity = async (req, res, next) => {
   try {
     const userId = getUserId(req);
     const { serverId } = req.params;
 
-    const { enabled, httpsOnly, allowedMethods, rateLimitPerMinute } =
-      req.body;
+    const {
+      enabled,
+      httpsOnly,
+      allowedMethods,
+      rateLimitPerMinute,
+    } = req.body;
 
     const { endpoint } = await getOwnedEndpoint(
       userId,
       serverId
     );
 
-    const updates = {
-      enabled,
-      httpsOnly,
-      allowedMethods,
-      rateLimitPerMinute,
-    };
+    if (enabled !== undefined) {
+      if (typeof enabled !== "boolean") {
+        throw createError(
+          "enabled must be a boolean.",
+          400,
+          "INVALID_SECURITY_SETTING"
+        );
+      }
 
-    const providedFields = Object.keys(updates).filter(
-      (field) => updates[field] !== undefined
-    );
-
-    if (providedFields.length === 0) {
-      throw createError(
-        "No security settings provided.",
-        400,
-        "NO_SECURITY_SETTINGS"
-      );
+      endpoint.security.enabled = enabled;
     }
 
-    if (
-      enabled !== undefined &&
-      typeof enabled !== "boolean"
-    ) {
-      throw createError(
-        "Security enabled must be a boolean.",
-        400,
-        "INVALID_SECURITY_SETTING"
-      );
-    }
+    if (httpsOnly !== undefined) {
+      if (typeof httpsOnly !== "boolean") {
+        throw createError(
+          "httpsOnly must be a boolean.",
+          400,
+          "INVALID_SECURITY_SETTING"
+        );
+      }
 
-    if (
-      httpsOnly !== undefined &&
-      typeof httpsOnly !== "boolean"
-    ) {
-      throw createError(
-        "httpsOnly must be a boolean.",
-        400,
-        "INVALID_SECURITY_SETTING"
-      );
+      endpoint.security.httpsOnly = httpsOnly;
     }
 
     if (allowedMethods !== undefined) {
@@ -867,7 +984,7 @@ const updateEndpointSecurity = async (req, res, next) => {
         )
       ) {
         throw createError(
-          "One or more allowed HTTP methods are invalid.",
+          "Invalid allowed HTTP methods.",
           400,
           "INVALID_ALLOWED_METHODS"
         );
@@ -878,14 +995,6 @@ const updateEndpointSecurity = async (req, res, next) => {
           allowedMethods.map((method) => method.toUpperCase())
         ),
       ];
-    }
-
-    if (enabled !== undefined) {
-      endpoint.security.enabled = enabled;
-    }
-
-    if (httpsOnly !== undefined) {
-      endpoint.security.httpsOnly = httpsOnly;
     }
 
     if (rateLimitPerMinute !== undefined) {
@@ -900,18 +1009,12 @@ const updateEndpointSecurity = async (req, res, next) => {
         );
       }
 
-      endpoint.security.rateLimitPerMinute =
-        rateLimitPerMinute;
+      endpoint.security.rateLimitPerMinute = rateLimitPerMinute;
     }
 
-    // Revalidate existing destinations if HTTPS becomes mandatory
+    // Revalidate all destinations if HTTPS is required
     if (endpoint.security.httpsOnly) {
-      endpoint.redirectionLink = validateDestinationLink(
-        endpoint.redirectionLink,
-        true
-      );
-
-      for (const link of endpoint.optionalLinks) {
+      for (const link of endpoint.redirectionLinks) {
         link.destinationLink = validateDestinationLink(
           link.destinationLink,
           true
@@ -925,7 +1028,7 @@ const updateEndpointSecurity = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      message: "Endpoint security settings updated successfully.",
+      message: "Security settings updated successfully.",
       data: {
         security: endpoint.security,
         configVersion: endpoint.configVersion,
@@ -936,8 +1039,7 @@ const updateEndpointSecurity = async (req, res, next) => {
   }
 };
 
-
-// ACTIVATE OR DEACTIVATE SERVER ENDPOINT
+// ACTIVATE / DEACTIVATE ENDPOINT
 const updateEndpointStatus = async (req, res, next) => {
   try {
     const userId = getUserId(req);
@@ -966,8 +1068,8 @@ const updateEndpointStatus = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: isActive
-        ? "Server endpoint activated successfully."
-        : "Server endpoint deactivated successfully.",
+        ? "Endpoint activated successfully."
+        : "Endpoint deactivated successfully.",
       data: {
         isActive: endpoint.isActive,
         configVersion: endpoint.configVersion,
@@ -977,7 +1079,6 @@ const updateEndpointStatus = async (req, res, next) => {
     return handleEndpointError(error, next);
   }
 };
-
 
 // DELETE SERVER ENDPOINT
 const deleteServerEndpoint = async (req, res, next) => {
@@ -992,7 +1093,7 @@ const deleteServerEndpoint = async (req, res, next) => {
 
     await ServerEndpoint.deleteOne({
       _id: endpoint._id,
-      serverId,
+      serverId: endpoint.serverId,
     });
 
     return res.status(200).json({
@@ -1008,16 +1109,140 @@ const deleteServerEndpoint = async (req, res, next) => {
   }
 };
 
+// Select highest-priority active destination
+const selectDestination = (endpoint) => {
+  const activeLinks = endpoint.redirectionLinks
+    .filter((link) => link.isActive)
+    .sort((a, b) => a.priority - b.priority);
 
-// PUBLIC TRAFFIC HANDLER
-const redirectTraffic = async (req, res, next) => {
+  if (activeLinks.length === 0) {
+    throw createError(
+      "No active destination is configured for this endpoint.",
+      503,
+      "NO_ACTIVE_DESTINATION"
+    );
+  }
+
+  return activeLinks[0].destinationLink;
+};
+
+// Check server and monitoring health
+const checkServerHealth = async (serverId) => {
+  const server = await Server.findOne({
+    _id: serverId,
+    isActive: true,
+    status: "running",
+  }).select("_id status monitoringEnabled");
+
+  if (!server) {
+    throw createError(
+      "The hosted server is not running.",
+      503,
+      "SERVER_NOT_RUNNING"
+    );
+  }
+
+  // Monitoring disabled: don't require heartbeat data.
+  if (!server.monitoringEnabled) {
+    return;
+  }
+
+  const monitoringData = await MonitoringData.findOne({
+    serverId,
+  }).select("health lastHeartbeatAt");
+
+  if (!monitoringData) {
+    throw createError(
+      "Monitoring data is unavailable.",
+      503,
+      "MONITORING_DATA_UNAVAILABLE"
+    );
+  }
+
+  if (
+    monitoringData.health === "down" ||
+    monitoringData.health === "unknown"
+  ) {
+    throw createError(
+      "The hosted server is not reporting healthy status.",
+      503,
+      "SERVER_UNHEALTHY"
+    );
+  }
+
+  const maxHeartbeatAge = Number(
+    process.env.SERVER_HEARTBEAT_MAX_AGE_MS || 120000
+  );
+
+  const heartbeatAge =
+    Date.now() -
+    new Date(monitoringData.lastHeartbeatAt).getTime();
+
+  if (
+    !Number.isFinite(heartbeatAge) ||
+    heartbeatAge < 0 ||
+    heartbeatAge > maxHeartbeatAge
+  ) {
+    throw createError(
+      "The server heartbeat is stale.",
+      503,
+      "SERVER_HEARTBEAT_STALE"
+    );
+  }
+};
+
+// Rewrite upstream absolute redirects to the permanent URL
+const rewriteLocationHeader = (
+  proxyRes,
+  destinationUrl,
+  permanentId
+) => {
+  const location = proxyRes.headers.location;
+
+  if (!location) {
+    return;
+  }
+
   try {
-    const { permanentId } = req.params;
+    const upstreamUrl = new URL(location, destinationUrl);
 
-    if (
-      typeof permanentId !== "string" ||
-      !/^[a-z0-9-]+$/.test(permanentId)
-    ) {
+    if (upstreamUrl.origin !== destinationUrl.origin) {
+      return;
+    }
+
+    const publicBase = new URL(getPublicBaseUrl());
+
+    proxyRes.headers.location =
+      `${publicBase.origin}/s/${permanentId}` +
+      `${upstreamUrl.pathname}${upstreamUrl.search}${upstreamUrl.hash}`;
+  } catch {
+    // Leave invalid upstream Location headers unchanged
+  }
+};
+
+// Shared proxy response listener
+
+proxy.on("proxyRes", (proxyRes, req) => {
+  if (req.__spareShareDestinationUrl && req.__spareSharePermanentId) {
+    rewriteLocationHeader(
+      proxyRes,
+      req.__spareShareDestinationUrl,
+      req.__spareSharePermanentId
+    );
+  }
+
+  let bytesOut = 0;
+  proxyRes.on("data", (chunk) => {bytesOut += chunk.length;});
+  proxyRes.on("end", () => {req.__spareShareBytesOut = bytesOut;});
+});
+
+
+// PUBLIC REVERSE PROXY HANDLER
+const proxyTraffic = async (req, res, next) => {
+  try {
+    const{permanentId} = req.params;
+
+    if(typeof permanentId !== "string" || !/^[a-z0-9-]+$/.test(permanentId)) {
       throw createError(
         "Invalid permanent endpoint identifier.",
         400,
@@ -1025,129 +1250,133 @@ const redirectTraffic = async (req, res, next) => {
       );
     }
 
-    const permanentLink =
-      `${getPublicBaseUrl()}/${permanentId}`;
+    const permanentLink = `${getPublicBaseUrl()}/${permanentId}`;
 
-    const endpoint = await ServerEndpoint.findOne({
-      permanentLink,
-      isActive: true,
-    });
+    const endpoint = await ServerEndpoint.findOne({permanentLink, isActive: true,});
 
-    if (!endpoint) {
+    if(!endpoint) {
       throw createError(
-        "Server endpoint not found or inactive.",
+        "Endpoint not found or inactive.",
         404,
         "SERVER_ENDPOINT_NOT_FOUND"
       );
     }
 
-    const server = await Server.findOne({
-      _id: endpoint.serverId,
-      isActive: true,
-      status: { $nin: ["deleted", "failed"] },
-    }).select("_id status");
-
-    if (!server) {
+    if (endpoint.security.enabled && !endpoint.security.allowedMethods.includes(req.method)){
       throw createError(
-        "The hosted server is unavailable.",
-        503,
-        "SERVER_UNAVAILABLE"
-      );
-    }
-
-    // Check server-level monitoring information
-    const monitoringData = await MonitoringData.findOne({
-      serverId: endpoint.serverId,
-    }).select("health lastHeartbeatAt");
-
-    if (monitoringData?.health === "down") {
-      throw createError(
-        "The hosted server is currently down.",
-        503,
-        "SERVER_HEALTH_DOWN"
-      );
-    }
-
-    // Check whether the HTTP method is allowed
-    if (
-      endpoint.security?.enabled &&
-      !endpoint.security.allowedMethods.includes(req.method)
-    ) {
-      throw createError(
-        "This HTTP method is not allowed.",
+        "HTTP method is not allowed.",
         405,
         "HTTP_METHOD_NOT_ALLOWED"
       );
     }
 
-    // Proxy mode must be handled by the dedicated gateway
-    if (endpoint.routingMode === "proxy") {
-      throw createError(
-        "Reverse proxy routing is not handled by this Express endpoint. Configure the public gateway to process proxy-mode endpoints.",
-        501,
-        "PROXY_ROUTING_NOT_IMPLEMENTED"
-      );
-    }
+    await checkServerHealth(endpoint.serverId);
 
-    // Redirect mode: use the primary destination
     const destination = validateDestinationLink(
-      endpoint.redirectionLink,
-      endpoint.security?.enabled &&
-        endpoint.security?.httpsOnly !== false
+      selectDestination(endpoint),
+      endpoint.security.httpsOnly
     );
 
-    const targetUrl = new URL(destination);
+    const destinationUrl = new URL(destination);
+
+    // Extract the path following /s/:permanentId
     const incomingUrl = new URL(
       req.originalUrl,
-      "http://localhost"
+      "http://internal.local"
     );
 
     const prefix = `/s/${permanentId}`;
-    const remainingPath = incomingUrl.pathname.startsWith(prefix)
-      ? incomingUrl.pathname.slice(prefix.length)
-      : "";
 
-    if (remainingPath) {
-      targetUrl.pathname =
-        `${targetUrl.pathname.replace(/\/+$/, "")}/` +
-        remainingPath.replace(/^\/+/, "");
+    let remainingPath = incomingUrl.pathname.slice(
+      prefix.length
+    );
+
+    if (!remainingPath.startsWith("/")) {
+      remainingPath = `/${remainingPath}`;
     }
 
+    if (remainingPath === "/") {
+      remainingPath = "";
+    }
+
+    const basePath = destinationUrl.pathname.replace(/\/+$/, "");
+
+    const forwardedPath =
+      `${basePath}${remainingPath}` || "/";
+
     // Preserve the incoming query string
-    incomingUrl.searchParams.forEach((value, key) => {
-      targetUrl.searchParams.append(key, value);
+    req.url = `${forwardedPath}${incomingUrl.search}`;
+
+    // Do not cache proxied responses
+    res.setHeader("Cache-Control", "no-store");
+
+    // Avoid exposing the upstream host in referrer metadata
+    res.setHeader("Referrer-Policy", "same-origin");
+
+    // Attach request-specific metadata before proxying
+    req.__spareShareDestinationUrl = destinationUrl;
+    req.__spareSharePermanentId = permanentId;
+
+
+    const requestStartedAt = Date.now();
+    const bytesIn = Number(req.headers["content-length"] || 0);
+
+    res.once("finish", () => {
+      const durationMs = Date.now() - requestStartedAt;
+
+      recordProxyTraffic({
+        serverId: endpoint.serverId,
+        method: req.method,
+        path: remainingPath || "/",
+        statusCode: res.statusCode,
+        durationMs,
+        bytesIn,
+        bytesOut: req.__spareShareBytesOut || 0,
+      });
     });
 
-    // 307 preserves the original HTTP method and request body.
-    // 302 is sufficient for ordinary GET and HEAD requests.
-    const statusCode =
-      ["GET", "HEAD"].includes(req.method) ? 302 : 307;
+    proxy.web(
+      req,
+      res,
+      {
+        target: destinationUrl.origin,
+        changeOrigin: true,
+        xfwd: true,
+        secure: true,
+        prependPath: false,
+        proxyTimeout: 30000,
+        timeout: 30000,
+        cookieDomainRewrite: "",
+      },
+      (error) => {
+        if (res.headersSent) {
+          return res.destroy(error);
+        }
 
-    res.set("Cache-Control", "no-store");
-
-    return res.redirect(statusCode, targetUrl.toString());
+        return next(
+          createError(
+            "The destination server could not be reached.",
+            502,
+            "UPSTREAM_SERVER_ERROR"
+          )
+        );
+      }
+    );
   } catch (error) {
     return next(error);
   }
 };
 
-
 module.exports = {
   createServerEndpoint,
   getServerEndpoint,
   getServerEndpoints,
-
-  addOptionalLink,
-  updateOptionalLink,
-  removeOptionalLink,
-  updateOptionalLinkPriority,
-
+  addRedirectionLink,
   updateRedirectionLink,
+  removeRedirectionLink,
   updateRoutingMode,
   updateEndpointSecurity,
   updateEndpointStatus,
-
   deleteServerEndpoint,
-
-  redirectTraffic,
+  proxyTraffic,
 };

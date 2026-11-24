@@ -47,7 +47,6 @@ const serverEndpointSchema = new mongoose.Schema(
       unique: true,
     },
 
-    // Permanent endpoint identifier
     permanentLink: {
       type: String,
       required: true,
@@ -57,8 +56,7 @@ const serverEndpointSchema = new mongoose.Schema(
       immutable: true,
     },
 
-    // User-specific device destinations
-    redirectionLink: {
+    redirectionLinks: {
       type: [userDeviceMappingSchema],
       default: [],
     },
@@ -86,17 +84,25 @@ const serverEndpointSchema = new mongoose.Schema(
         type: Boolean,
         default: true,
       },
-    
+
       httpsOnly: {
         type: Boolean,
         default: true,
       },
-    
+
       allowedMethods: {
         type: [String],
-        default: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        default: [
+          "GET",
+          "HEAD",
+          "POST",
+          "PUT",
+          "PATCH",
+          "DELETE",
+          "OPTIONS",
+        ],
       },
-    
+
       rateLimitPerMinute: {
         type: Number,
         default: 120,
@@ -114,17 +120,17 @@ const serverEndpointSchema = new mongoose.Schema(
 
 // Validate unique user-device combinations
 serverEndpointSchema.pre("validate", function () {
-  const combinations = this.optionalLinks.map(
+  const combinations = this.redirectionLinks.map(
     (link) =>
       `${link.userId?.toString()}_${link.deviceId?.toString()}`
   );
 
   if (new Set(combinations).size !== combinations.length) {
     this.invalidate(
-      "optionalLinks",
+      "redirectionLinks",
       "Duplicate user and device combinations are not allowed."
     );
   }
 });
 
-module.exports = mongoose.model("ServerEndpoint",serverEndpointSchema);
+module.exports = mongoose.models.ServerEndpoint || mongoose.model("ServerEndpoint", serverEndpointSchema);
