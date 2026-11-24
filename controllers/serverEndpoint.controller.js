@@ -121,12 +121,42 @@ const getPublicBaseUrl = () => {
 };
 
 // Generate permanent link
-const generatePermanentLink = (slug) => {
-  const normalizedSlug = createSlug(slug) || "server";
-  const suffix = crypto.randomBytes(5).toString("hex");
+// const generatePermanentLink = (slug) => {
+//   const normalizedSlug = createSlug(slug) || "server";
+//   const suffix = crypto.randomBytes(5).toString("hex");
 
-  return `${getPublicBaseUrl()}/${normalizedSlug}-${suffix}`;
+//   return `${getPublicBaseUrl()}/${normalizedSlug}-${suffix}`;
+// };
+
+
+// Generate a unique permanent endpoint URL
+const generatePermanentLink = async (slug, maxAttempts = 10) => {
+  const normalizedSlug = createSlug(slug) || "server";
+  const baseUrl = getPublicBaseUrl();
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // Generate a cryptographically secure 80-bit random suffix
+    const suffix = crypto.randomBytes(10).toString("hex");
+
+    const permanentLink = `${baseUrl}/${normalizedSlug}-${suffix}`;
+
+    // Check whether this permanent link already exists
+    const existing = await ServerEndpoint.exists({
+      permanentLink,
+    });
+
+    if (!existing) {
+      return permanentLink;
+    }
+  }
+
+  throw createError(
+    "Unable to generate a unique permanent endpoint after multiple attempts.",
+    503,
+    "PERMANENT_LINK_GENERATION_FAILED"
+  );
 };
+
 
 // Validate destination URL
 const validateDestinationLink = (value, httpsOnly = true) => {
