@@ -54,3 +54,6 @@ temp/
 # Optional local database files
 *.sqlite
 *.sqlite3
+
+
+overall-design.txt
