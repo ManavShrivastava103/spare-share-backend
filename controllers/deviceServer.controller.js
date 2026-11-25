@@ -1,4 +1,3 @@
-
 const mongoose = require("mongoose");
 
 const DeviceServer = require("../models/deviceServer.model");
@@ -89,18 +88,30 @@ const handleDeviceServerError = (error, next) => {
 };
 
 
-// Verify that the device belongs to the authenticated user.
-const getOwnedDevice = async (userId, deviceId) => {
-  if (!isValidObjectId(deviceId)) {
+// Validate and normalize custom string-based device ID.
+const validateDeviceId = (deviceId) => {
+  if (
+    typeof deviceId !== "string" ||
+    !deviceId.trim()
+  ) {
     throw createError(
-      "Invalid device ID.",
+      "A valid device ID is required.",
       400,
       "INVALID_DEVICE_ID"
     );
   }
 
+  return deviceId.trim();
+};
+
+
+// Verify that the device belongs to the authenticated user.
+// deviceId is the custom string ID, e.g. DEVSS-000001.
+const getOwnedDevice = async (userId, deviceId) => {
+  const normalizedDeviceId = validateDeviceId(deviceId);
+
   const device = await Device.findOne({
-    _id: deviceId,
+    deviceId: normalizedDeviceId,
     userId,
     status: { $ne: "disabled" },
   });
@@ -181,7 +192,6 @@ const getOwnedAssignment = async (userId, assignmentId) => {
 
 // Find the smallest unused port for a particular device.
 //
-// IMPORTANT:
 // No status filter is applied.
 // Even removed assignments reserve their previously assigned ports.
 const findAvailablePort = async (deviceId) => {
@@ -229,10 +239,11 @@ const findAvailablePort = async (deviceId) => {
 
 // Required request body:
 // {
-//   "deviceId": "DEVICE_OBJECT_ID",
+//   "deviceId": "DEVSS-000001",
 //   "serverId": "SERVER_OBJECT_ID"
 // }
 //
+// deviceId is a custom string ID.
 // onPort is automatically assigned.
 const createDeviceServer = async (req, res, next) => {
   try {
@@ -248,15 +259,17 @@ const createDeviceServer = async (req, res, next) => {
       );
     }
 
+    const normalizedDeviceId = validateDeviceId(deviceId);
+
     // Verify device and server ownership.
     const [device, server] = await Promise.all([
-      getOwnedDevice(userId, deviceId),
+      getOwnedDevice(userId, normalizedDeviceId),
       getOwnedServer(userId, serverId),
     ]);
 
     // Check whether this exact assignment already exists.
     const existingAssignment = await DeviceServer.findOne({
-      deviceId: device._id,
+      deviceId: device.deviceId,
       serverId: server._id,
     });
 
@@ -275,11 +288,11 @@ const createDeviceServer = async (req, res, next) => {
       attempt <= MAX_PORT_ALLOCATION_ATTEMPTS;
       attempt++
     ) {
-      const onPort = await findAvailablePort(device._id);
+      const onPort = await findAvailablePort(device.deviceId);
 
       try {
         const assignment = await DeviceServer.create({
-          deviceId: device._id,
+          deviceId: device.deviceId,
           serverId: server._id,
           onPort,
           status: "assigned",
@@ -327,10 +340,10 @@ const createDeviceServer = async (req, res, next) => {
 // ============================================================
 
 // Optional query parameters:
-// ?deviceId=...
-// ?serverId=...
+// ?deviceId=DEVSS-000001
+// ?serverId=SERVER_OBJECT_ID
 //
-// Without filters, returns all assignments belonging to
+// Without filters, returns assignments belonging to
 // the authenticated user's devices and servers.
 const getDeviceServers = async (req, res, next) => {
   try {
@@ -342,14 +355,16 @@ const getDeviceServers = async (req, res, next) => {
 
     if (deviceId) {
       const device = await getOwnedDevice(userId, deviceId);
-      query.deviceId = device._id;
+      query.deviceId = device.deviceId;
     } else {
       const devices = await Device.find({
         userId,
-      }).select("_id").lean();
+      })
+        .select("deviceId")
+        .lean();
 
       query.deviceId = {
-        $in: devices.map((device) => device._id),
+        $in: devices.map((device) => device.deviceId),
       };
     }
 
@@ -361,7 +376,9 @@ const getDeviceServers = async (req, res, next) => {
         owner: userId,
         isActive: true,
         status: { $ne: "deleted" },
-      }).select("_id").lean();
+      })
+        .select("_id")
+        .lean();
 
       query.serverId = {
         $in: servers.map((server) => server._id),
