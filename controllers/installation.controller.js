@@ -284,7 +284,7 @@ const generateRuntimeDownload = (config) => {
 const downloadPip = generateRuntimeDownload({
   name: "pip",
   objectKeyEnv: "TIGRIS_OBJECT_PIP",
-  filename: "pip-archive.tar.gz",
+  filename: "pip.pyz",
 });
 
 
@@ -292,7 +292,7 @@ const downloadPip = generateRuntimeDownload({
 const downloadNpm = generateRuntimeDownload({
   name: "npm",
   objectKeyEnv: "TIGRIS_OBJECT_NPM",
-  filename: "npm-archive.tar.gz",
+  filename: "node-v26.13.1-linux-arm64.tar.xz",
 });
 
 
@@ -300,7 +300,7 @@ const downloadNpm = generateRuntimeDownload({
 const downloadJdk = generateRuntimeDownload({
   name: "JDK",
   objectKeyEnv: "TIGRIS_OBJECT_JDK",
-  filename: "jdk-archive.tar.gz",
+  filename: "OpenJDK25U-jdk_aarch64_linux_hotspot_25.0.5.1_2.tar.gz",
 });
 
 
@@ -308,7 +308,7 @@ const downloadJdk = generateRuntimeDownload({
 const downloadPython = generateRuntimeDownload({
   name: "Python",
   objectKeyEnv: "TIGRIS_OBJECT_PYTHON",
-  filename: "python-archive.tar.gz",
+  filename: "cpython-3.11.18+20261123-aarch64-unknown-linux-gnu-install_only.tar.gz",
 });
 
 
@@ -316,7 +316,7 @@ const downloadPython = generateRuntimeDownload({
 const downloadCloudflareDebian12ARM64 = generateRuntimeDownload({
   name: "Cloudflare Debian 12 ARM 64",
   objectKeyEnv: "TIGRIS_OBJECT_CLOUDFLARE_DEBIAN_12_ARM64",
-  filename: "cloudflare-debian-12-arm64-archive.tar.gz",
+  filename: "cloudflare-warp_2026.8.2115.0_arm64.deb",
 });
 
 
@@ -324,8 +324,9 @@ const downloadCloudflareDebian12ARM64 = generateRuntimeDownload({
 const downloadCloudflareDebian13ARM64 = generateRuntimeDownload({
   name: "Cloudflare Debian 13 ARM 64",
   objectKeyEnv: "TIGRIS_OBJECT_CLOUDFLARE_DEBIAN_13_ARM64",
-  filename: "cloudflare-debian-13-arm64-archive.tar.gz",
+  filename: "cloudflare-warp_2026.8.2115.0_arm64.deb",
 });
+
 
 module.exports = {
   saveDeviceInfo,
