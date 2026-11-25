@@ -458,7 +458,7 @@ const loginWithOtp = async (req, res, next) => {
     });
 
     // Update the Device record to associate it with the logged-in user if a deviceId is provided
-    if(deviceId){
+    if(deviceId && deviceId!=="NA-deviceId"){
       const device = await Device.findOne({ deviceId }).session(session);
       const { manufacturer, model } = device;
       const deviceName = await generateDeviceName({userId,manufacturer,model,session});
