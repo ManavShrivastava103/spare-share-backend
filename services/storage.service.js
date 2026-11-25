@@ -2,12 +2,11 @@
 const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
+// Tigris configuration
 const requiredEnv = [
-  "B2_REGION",
-  "B2_ENDPOINT",
-  "B2_ACCESS_KEY_ID",
-  "B2_SECRET_ACCESS_KEY",
-  "B2_BUCKET_NAME",
+  "TIGRIS_ACCESS_KEY_ID",
+  "TIGRIS_SECRET_ACCESS_KEY",
+  "TIGRIS_BUCKET_NAME",
 ];
 
 for (const variable of requiredEnv) {
@@ -17,14 +16,16 @@ for (const variable of requiredEnv) {
 }
 
 const s3Client = new S3Client({
-  region: process.env.B2_REGION,
-  endpoint: process.env.B2_ENDPOINT,
+  region: "auto",
+  endpoint: process.env.TIGRIS_ENDPOINT || "https://t3.storage.dev",
+  forcePathStyle: false,
   credentials: {
-    accessKeyId: process.env.B2_ACCESS_KEY_ID,
-    secretAccessKey: process.env.B2_SECRET_ACCESS_KEY,
+    accessKeyId: process.env.TIGRIS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.TIGRIS_SECRET_ACCESS_KEY,
   },
 });
 
+// Generate a secure download URL for an object stored in Tigris.
 const generateDownloadUrl = async ({
   objectKey,
   filename,
@@ -35,7 +36,7 @@ const generateDownloadUrl = async ({
   }
 
   const command = new GetObjectCommand({
-    Bucket: process.env.B2_BUCKET_NAME,
+    Bucket: process.env.TIGRIS_BUCKET_NAME,
     Key: objectKey,
     ResponseContentDisposition: `attachment; filename="${filename}"`,
   });

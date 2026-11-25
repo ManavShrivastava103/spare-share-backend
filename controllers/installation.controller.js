@@ -232,6 +232,10 @@ const saveDeviceInfo = async (req, res, next) => {
 
 
 
+// ============================================================
+// RUNTIME AND PACKAGE DOWNLOADS (TIGRIS)
+// ============================================================
+
 // Generate a secure download URL for a runtime/package archive.
 const generateRuntimeDownload = (config) => {
   return async (req, res, next) => {
@@ -279,7 +283,7 @@ const generateRuntimeDownload = (config) => {
 // Download pip archive.
 const downloadPip = generateRuntimeDownload({
   name: "pip",
-  objectKeyEnv: "B2_OBJECT_PIP",
+  objectKeyEnv: "TIGRIS_OBJECT_PIP",
   filename: "pip-archive.tar.gz",
 });
 
@@ -287,38 +291,41 @@ const downloadPip = generateRuntimeDownload({
 // Download npm archive.
 const downloadNpm = generateRuntimeDownload({
   name: "npm",
-  objectKeyEnv: "B2_OBJECT_NPM",
+  objectKeyEnv: "TIGRIS_OBJECT_NPM",
   filename: "npm-archive.tar.gz",
 });
+
 
 // Download JDK archive.
 const downloadJdk = generateRuntimeDownload({
   name: "JDK",
-  objectKeyEnv: "B2_OBJECT_JDK",
+  objectKeyEnv: "TIGRIS_OBJECT_JDK",
   filename: "jdk-archive.tar.gz",
 });
+
 
 // Download Python archive.
 const downloadPython = generateRuntimeDownload({
   name: "Python",
-  objectKeyEnv: "B2_OBJECT_PYTHON",
+  objectKeyEnv: "TIGRIS_OBJECT_PYTHON",
   filename: "python-archive.tar.gz",
 });
 
-// Download Cloudflare debian 12 ARM 64
+
+// Download Cloudflare Debian 12 ARM64.
 const downloadCloudflareDebian12ARM64 = generateRuntimeDownload({
   name: "Cloudflare Debian 12 ARM 64",
-  objectKeyEnv: "B2_OBJECT_CLOUDFLARE_DEBIAN_12_ARM64",
+  objectKeyEnv: "TIGRIS_OBJECT_CLOUDFLARE_DEBIAN_12_ARM64",
   filename: "cloudflare-debian-12-arm64-archive.tar.gz",
 });
 
-// Download Cloudflare debian 13 ARM 64
+
+// Download Cloudflare Debian 13 ARM64.
 const downloadCloudflareDebian13ARM64 = generateRuntimeDownload({
   name: "Cloudflare Debian 13 ARM 64",
-  objectKeyEnv: "B2_OBJECT_CLOUDFLARE_DEBIAN_13_ARM64",
+  objectKeyEnv: "TIGRIS_OBJECT_CLOUDFLARE_DEBIAN_13_ARM64",
   filename: "cloudflare-debian-13-arm64-archive.tar.gz",
 });
-
 
 module.exports = {
   saveDeviceInfo,
