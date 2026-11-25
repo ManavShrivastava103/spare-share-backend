@@ -83,6 +83,7 @@ const serverEndpointRoutes = require("./routes/serverEndpoint.routes");
 const deviceAgentRoutes = require("./routes/deviceAgent.routes");
 const serverEndpointController = require("./controllers/serverEndpoint.controller");
 const serverEnvironmentRoutes = require("./routes/serverEnvironment.routes");
+const deviceServerRoutes = require("./routes/deviceServer.routes");
 
 const errorMiddleware = require("./middlewares/error.middleware");
 const initializeCounters = require("./services/counter.service");
@@ -139,6 +140,7 @@ app.use("/api/github", githubRoutes);
 app.use("/api/server-endpoint", serverEndpointRoutes);
 app.use("/api/device-agent", deviceAgentRoutes);
 app.use("/api/server-env", serverEnvironmentRoutes);
+app.use("/api/device-server", deviceServerRoutes);
 
 
 // HEALTH CHECK

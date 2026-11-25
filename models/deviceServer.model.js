@@ -14,6 +14,13 @@ const deviceServerSchema = new mongoose.Schema(
       required: true,
     },
 
+    onPort: {
+      type: Number,
+      required: true,
+      min: 3000,
+      max: 65535,
+    },
+
     status: {
       type: String,
       enum: [
@@ -59,14 +66,17 @@ deviceServerSchema.index(
   }
 );
 
-deviceServerSchema.index({
-  serverId: 1,
-  status: 1,
-});
-
-deviceServerSchema.index({
-  deviceId: 1,
-  status: 1,
-});
+// A port can only be assigned once per device.
+// Includes assignments with status "removed".
+deviceServerSchema.index(
+  {
+    deviceId: 1,
+    onPort: 1,
+  },
+  {
+    unique: true,
+    name: "unique_device_port",
+  }
+);
 
 module.exports = mongoose.model("DeviceServer", deviceServerSchema);
