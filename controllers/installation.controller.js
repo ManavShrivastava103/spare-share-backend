@@ -7,6 +7,8 @@ const Device = require("../models/device.model");
 const Counter = require("../models/counter.model");
 const UserSession = require("../models/userSession.model");
 
+const { generateDownloadUrl } = require("../services/storage.service");
+
 
 // Function to Download Debian ARM64 Rootfs.
 const downloadRootfs = async (req, res, next) => {
