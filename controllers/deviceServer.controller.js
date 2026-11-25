@@ -386,19 +386,36 @@ const getDeviceServers = async (req, res, next) => {
     }
 
     const assignments = await DeviceServer.find(query)
-      .populate("deviceId")
       .populate("serverId")
       .sort({
         createdAt: -1,
       })
       .lean();
+    
+    const deviceIds = [
+      ...new Set(assignments.map((item) => item.deviceId)),
+    ];
+    
+    const devices = await Device.find({
+      deviceId: { $in: deviceIds },
+      userId,
+    }).lean();
+    
+    const deviceMap = new Map(
+      devices.map((device) => [device.deviceId, device])
+    );
+    
+    const enrichedAssignments = assignments.map((assignment) => ({
+      ...assignment,
+      device: deviceMap.get(assignment.deviceId) || null,
+    }));
 
     return res.status(200).json({
       success: true,
       message: "Device server assignments fetched successfully.",
       count: assignments.length,
       data: {
-        assignments,
+        assignments: enrichedAssignments,
       },
     });
 
@@ -423,14 +440,24 @@ const getDeviceServerById = async (req, res, next) => {
       assignmentId
     );
 
-    await assignment.populate([
-      {
-        path: "deviceId",
-      },
-      {
-        path: "serverId",
-      },
+    const [device, server] = await Promise.all([
+    Device.findOne({
+        deviceId: assignment.deviceId,
+        userId,
+      }).lean(),
+
+      Server.findById(assignment.serverId).lean(),
     ]);
+
+    return res.status(200).json({
+      success: true,
+      message: "Device server assignment fetched successfully.",
+      data: {
+        assignment,
+        device,
+        server,
+      },
+    });
 
     return res.status(200).json({
       success: true,
@@ -583,10 +610,65 @@ const deleteDeviceServer = async (req, res, next) => {
 };
 
 
+
+// ============================================================
+// GET DEVICE SERVER ASSIGNMENT BY DEVICE ID AND SERVER ID
+// ============================================================
+
+// Route:
+// GET /api/device-server/lookup/:deviceId/:serverId
+//
+// deviceId = Custom string ID (DEVSS-000001)
+// serverId = MongoDB ObjectId
+
+const getDeviceServerByDeviceAndServer = async (req, res, next) => {
+  try {
+    const userId = getUserId(req);
+
+    const { deviceId, serverId } = req.params;
+
+    // Verify ownership of both resources.
+    const [device, server] = await Promise.all([
+      getOwnedDevice(userId, deviceId),
+      getOwnedServer(userId, serverId),
+    ]);
+
+    // Find the exact assignment.
+    const assignment = await DeviceServer.findOne({
+      deviceId: device.deviceId,
+      serverId: server._id,
+    }).lean();
+
+    if (!assignment) {
+      throw createError(
+        "No assignment found for this device and server.",
+        404,
+        "DEVICE_SERVER_NOT_FOUND"
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Device server assignment fetched successfully.",
+      data: {
+        assignment,
+        device,
+        server,
+      },
+    });
+
+  } catch (error) {
+    return next(error);
+  }
+};
+
+
+
 module.exports = {
   createDeviceServer,
   getDeviceServers,
   getDeviceServerById,
   updateDeviceServer,
   deleteDeviceServer,
+  getDeviceServerByDeviceAndServer,
 };

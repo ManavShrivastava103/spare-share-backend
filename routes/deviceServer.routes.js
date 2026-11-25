@@ -1,5 +1,4 @@
 const express = require("express");
-
 const router = express.Router();
 
 const authenticator = require(
@@ -11,8 +10,7 @@ const controller = require(
 );
 
 
-// Create a device-server assignment.
-// Port is automatically allocated.
+// CREATE ASSIGNMENT
 router.post(
   "/",
   authenticator(),
@@ -20,8 +18,7 @@ router.post(
 );
 
 
-// Get all assignments.
-// Optional filters: deviceId, serverId.
+// GET ALL ASSIGNMENTS / FILTER
 router.get(
   "/",
   authenticator(),
@@ -29,7 +26,15 @@ router.get(
 );
 
 
-// Get a single assignment.
+// GET ASSIGNMENT BY DEVICE ID AND SERVER ID
+router.get(
+  "/lookup/:deviceId/:serverId",
+  authenticator(),
+  controller.getDeviceServerByDeviceAndServer
+);
+
+
+// GET ASSIGNMENT BY ASSIGNMENT ID
 router.get(
   "/:assignmentId",
   authenticator(),
@@ -37,7 +42,7 @@ router.get(
 );
 
 
-// Update assignment status or priority.
+// UPDATE ASSIGNMENT
 router.patch(
   "/:assignmentId",
   authenticator(),
@@ -45,7 +50,7 @@ router.patch(
 );
 
 
-// Remove an assignment (soft delete).
+// DELETE ASSIGNMENT
 router.delete(
   "/:assignmentId",
   authenticator(),
