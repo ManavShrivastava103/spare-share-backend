@@ -90,7 +90,7 @@ const serverMonitoringStateSchema = new mongoose.Schema(
     lastTunnelAt: Date,
     lastHealthCheckAt: Date,
 
-        lastPublicEndpointStatus: {
+    lastPublicEndpointStatus: {
       type: Number,
       default: null,
     },
